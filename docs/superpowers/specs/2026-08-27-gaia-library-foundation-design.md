@@ -20,12 +20,17 @@ gaia-library（ガイアライブラリー）は、仕事の記憶の「思い�
 - CLI `gaia`（設定・DB 初期化、手入力、承認、サーバー起動）
 - テスト（単体・統合）
 
-### 1.2 今回の範囲外（次回以降）
+### 1.2 本書の範囲外（別サブプロジェクトで扱う）
 
-- Streamable HTTP トランスポートと API キー（bearer）認証、human キーの OS キーチェーン保持
+2026-08-27 の追加決定（Notion 未記載）: gaia-library は **Tauri デスクトップアプリを主 UI** とし、アプリ起動だけで DB とサーバーが立ち上がり、検索・閲覧・手入力・承認ができる。CLI / MCP（stdio・HTTP）でも同じ操作ができる。自動更新は tauri-plugin-updater（solo-eikaiwa と同方式）で、`gaia` CLI はアプリに同梱して一緒に更新する。v0.1.0 はこれらを揃えて公開する。本書（サブプロジェクト A: 基盤）はその土台であり、次は別の設計書で扱う。
+
+- サブプロジェクト B: Streamable HTTP トランスポート、API キー（bearer）認証、human キーの OS キーチェーン保持、エージェント向け接続設定の生成
+- サブプロジェクト C: デスクトップアプリ（Tauri）。サーバー・DB の起動、検索／人物・案件閲覧／手入力／提案承認の画面、updater、署名・公証・リリーススクリプト、E2E
 - `resolve_source`（narumi など外部 MCP の参照解決）。契約ファイルは置くが登録しない
 - 形態素解析（lindera-sqlite）、ベクトル検索（sqlite-vec）
 - narumi 連携の実機確認（narumi が未実装のため）
+
+CLI 単体の self-update は作らない（アプリの updater に一本化する）。
 
 ## 2. 決定事項
 
@@ -296,7 +301,7 @@ END;
 - polymorphic（`entity_type + entity_id`、`target_type + target_id`）の整合は書き込み時に検証し、違反は `invalid_params` で拒否する
 - 内容層への全クエリは `ScopeSet` を必ず受け取り、`scope IN (...)` を付ける。scope なしのクエリ関数を作らない
 - 「現在の fact」は `superseded_by IS NULL`
-- 人物の `name` と各 alias について、§8.3 の正規化を施した文字列を `kind='normalized'` の行として自動登録する（`resolve_speakers` はこの行だけを完全一致の対象にする）
+- 人物の `name` と各 alias について、§8.3 の正規化を施した文字列を `kind='normalized'` の行として自動登録する（`resolve_speakers` は「正規化した入力 = alias」の完全一致で突合する。`kind='normalized'` の行は出力には含めない）
 - `affiliations` は機密境界の定義そのものなので、提案キューではなく CLI の管理コマンド（human）で直接書き込み、`audit_log(admin_write)` に残す。これが提案キュー原則の唯一の例外である
 
 ## 6. 契約（contracts/）
@@ -344,8 +349,9 @@ END;
 
 ### 6.2 スキーマの書き方（typify 制約）
 
-- 使ってよいキーワード: `type` / `properties` / `required` / `additionalProperties` / `enum` / `oneOf` / `anyOf` / `items` / `minItems` / `minLength` / `minimum` / `maximum` / `default` / `description` / `$ref`（`../defs/common.json#/$defs/X` 形式のみ）
-- 使わない: `if/then/else`、`prefixItems`、`unevaluatedProperties`、`dependentSchemas`、`$anchor`、`pattern`、`format`、ツールファイル内の `$defs`
+- 使ってよいキーワード: `type` / `properties` / `required` / `additionalProperties` / `enum` / `oneOf` / `items` / `minItems` / `default`（整数のみ）/ `description` / `$ref`（`../defs/common.json#/$defs/X` 形式のみ）
+- 使わない: `if/then/else`、`prefixItems`、`unevaluatedProperties`、`dependentSchemas`、`$anchor`、`pattern`、`format`、ツールファイル内の `$defs`。また `minLength` / `minimum` / `maximum` は typify が newtype や `NonZeroU64` を生成して扱いにくくなるため使わず、長さ・範囲の検証はハンドラで行う
+- enum はプロパティ内に直書きせず、必ず `$defs` に名前付きで定義して `$ref` する（生成される Rust 型名を安定させるため）
 - 入力は `additionalProperties: false`。出力は将来の追加に備えて省略可
 - `$defs` の名前は全体で一意にする（1 つのプールに集約するため）
 
@@ -440,7 +446,7 @@ MCP への写像:
 3. `interactions.summary` と `glossary.term / definition` を `LIKE` で照合（scope 内）
 4. エンティティごとに facts（scope 内、現在のもの）と refs（エンティティ直付け＋その facts に付いたもの）を集める
 5. スコア: 名前一致 3、alias 一致 2、fact ヒット 1（bm25 順）。上位 `limit` 件
-出力: `{ query, scopes, cross_scope, entities: [{ type, id, name, summary, score, matched_on, facts: [Fact], refs: [Reference] }], glossary: [GlossaryTerm], interactions: [{ id, kind, occurred_at, summary, engagement_id, refs }], hints: [string] }`。`hints` には「3 文字未満のため部分一致で検索した」などの注記を入れる。
+出力: `{ query, scopes, cross_scope, entities: [{ type, id, name, summary, score, matched_on, facts: [Fact], refs: [Reference] }], glossary: [GlossaryTerm], interactions: [InteractionSummary], hints: [string] }`。`hints` には「3 文字未満のため部分一致で検索した」などの注記を入れる。
 
 **get_person** — 入力 `person_id?` または `name?`（どちらか必須。両方無ければ `invalid_params`）、`scope?`。出力: 人物、aliases、所属組織、関わる案件（`engagement_people`）、facts、refs、直近の interactions（scope 内、最大 20）。名前が複数該当なら `conflict` で候補一覧を返す。
 
@@ -459,7 +465,7 @@ MCP への写像:
 
 ### 8.4 提案系ツール
 
-**propose_update** — 入力: `target_type`（`person` / `organization` / `engagement` / `interaction` / `entity` / `fact` / `ref` / `glossary`）、`action`（`insert` / `update` / `supersede`）、`target_id?`、`patch`（target_type ごとの `Patch*`）、`kind`、`scope`、`provenance?`（既存 ref の id、または `{ system, uri, title?, note, snapshot? }` で新規 ref を同時登録）、`request_id`（string, minLength 8）。
+**propose_update** — 入力: `target_type`（`person` / `organization` / `engagement` / `interaction` / `entity` / `fact` / `ref` / `glossary`）、`action`（`insert` / `update` / `supersede`）、`target_id?`、`patch`（target_type ごとの `Patch*`。契約上は自由なオブジェクトで、ハンドラが target_type に応じて型付きで検証する）、`kind`、`scope?`（省略時はクライアントの既定 scope。単一の scope 名）、`provenance?`（`{ ref_id }` で既存 ref を指すか、`{ system, uri, title?, note, snapshot? }` で新規 ref を承認時に同時登録。新規 ref の紐付け先は承認で生成・更新されたレコードなので、`ref` / `glossary` を対象とする提案では `ref_id` 形式のみ受け付ける）、`request_id`（string。8 文字以上をハンドラで検証）。
 処理: `request_id` が既存なら同一 `proposed_by` のとき既存の提案を `duplicate: true` で返し、別のクライアントなら `conflict`。それ以外は `pending` で登録し、`audit_log(propose)`。`provenance` は既存 ref の id ならその存在を確認して `provenance_id` に入れ、新規 ref の内容なら `provenance`（JSON）に保持して承認時に refs へ書く。
 出力 `{ proposal_id, status, duplicate }`。
 
@@ -528,7 +534,7 @@ MCP への写像:
 | `gaia call <tool> --json <args>` | 任意ツールの汎用呼び出し |
 | `gaia info` | `get_server_info` |
 
-出力は既定で人が読む形、`--json` で生 JSON。ログは `tracing` で stderr、`RUST_LOG` で制御。
+出力は既定で整形済み JSON（人が読む用）、`--json` で 1 行の JSON（機械処理用）。ログは `tracing` で stderr、`RUST_LOG` で制御。
 
 ## 11. テスト
 
