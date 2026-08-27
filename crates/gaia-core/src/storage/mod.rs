@@ -93,6 +93,26 @@ impl Db {
 
 pub mod affiliations;
 pub mod audit;
+pub mod entities;
+pub mod organizations;
+pub mod people;
+
+/// insert 時の必須文字列。trim して空なら Integrity エラー。
+pub(crate) fn required<'a>(value: Option<&'a str>, what: &str) -> Result<&'a str, StorageError> {
+    match value.map(str::trim) {
+        Some(v) if !v.is_empty() => Ok(v),
+        _ => Err(StorageError::Integrity(format!("{what} is required"))),
+    }
+}
+
+/// DB の TEXT 列を契約 enum（typify 生成の FromStr 実装）へ変換する。
+pub(crate) fn parse_db_enum<T>(raw: &str, what: &str) -> Result<T, StorageError>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    raw.parse().map_err(|e: T::Err| StorageError::Integrity(format!("invalid {what} `{raw}` in db: {e}")))
+}
 
 fn configure(conn: &mut Connection) -> Result<(), StorageError> {
     // in-memory では "memory" が返るので戻り値は見ない
