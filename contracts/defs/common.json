@@ -1,0 +1,368 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "gaia-library common definitions",
+  "$defs": {
+    "ScopeInput": {
+      "description": "所属元 scope。単一名か配列。配列で 2 つ以上指定したときだけ横断し、監査ログに残る。省略時はクライアントの既定 scope",
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+      ]
+    },
+    "Kind": { "type": "string", "enum": ["fact", "inference"], "description": "fact=確認済みの事実 / inference=推測" },
+    "EntityType": { "type": "string", "enum": ["person", "organization", "engagement", "interaction", "entity"] },
+    "RefTargetType": { "type": "string", "enum": ["person", "organization", "engagement", "interaction", "entity", "fact"] },
+    "ProposalTargetType": { "type": "string", "enum": ["person", "organization", "engagement", "interaction", "entity", "fact", "ref", "glossary"] },
+    "ProposalAction": { "type": "string", "enum": ["insert", "update", "supersede"], "description": "supersede は fact のみ（旧 fact を superseded_by で置き換える）" },
+    "ProposalStatus": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+    "SearchType": { "type": "string", "enum": ["person", "organization", "engagement", "entity", "interaction", "glossary"] },
+    "SearchEntityType": { "type": "string", "enum": ["person", "organization", "engagement", "entity", "interaction"] },
+    "SpeakerStatus": { "type": "string", "enum": ["matched", "ambiguous", "unmatched"] },
+    "ErrorCode": { "type": "string", "enum": ["not_found", "scope_denied", "unauthorized", "invalid_params", "contract_mismatch", "conflict", "busy", "not_implemented", "internal"] },
+    "ErrorObject": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "$ref": "#/$defs/ErrorCode" },
+        "message": { "type": "string" },
+        "details": {}
+      }
+    },
+    "Alias": {
+      "type": "object",
+      "required": ["alias"],
+      "additionalProperties": false,
+      "properties": {
+        "alias": { "type": "string", "description": "表示名・ローマ字・ニックネーム" },
+        "kind": { "type": "string", "description": "display_name / romaji / nickname など任意" }
+      }
+    },
+    "PersonSummary": {
+      "type": "object",
+      "required": ["id", "name", "aliases"],
+      "properties": {
+        "id": { "type": "integer" },
+        "name": { "type": "string" },
+        "org_id": { "type": "integer" },
+        "org_name": { "type": "string" },
+        "role": { "type": "string" },
+        "first_met": { "type": "string" },
+        "last_seen": { "type": "string" },
+        "aliases": { "type": "array", "items": { "$ref": "#/$defs/Alias" } }
+      }
+    },
+    "OrganizationSummary": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "type": "integer" },
+        "name": { "type": "string" },
+        "kind": { "type": "string", "description": "customer / partner / affiliation など" }
+      }
+    },
+    "EngagementSummary": {
+      "type": "object",
+      "required": ["id", "name", "scope"],
+      "properties": {
+        "id": { "type": "integer" },
+        "name": { "type": "string" },
+        "org_id": { "type": "integer" },
+        "org_name": { "type": "string" },
+        "scope": { "type": "string" },
+        "status": { "type": "string" },
+        "started_at": { "type": "string" },
+        "ended_at": { "type": "string" }
+      }
+    },
+    "EngagementPerson": {
+      "type": "object",
+      "required": ["person"],
+      "properties": {
+        "person": { "$ref": "#/$defs/PersonSummary" },
+        "role": { "type": "string", "description": "key_person / member / contact など" }
+      }
+    },
+    "InteractionSummary": {
+      "type": "object",
+      "required": ["id", "kind", "occurred_at", "summary", "scope", "person_ids"],
+      "properties": {
+        "id": { "type": "integer" },
+        "kind": { "type": "string", "description": "meeting / call / chat / mail など" },
+        "occurred_at": { "type": "string", "description": "ISO 8601" },
+        "summary": { "type": "string" },
+        "engagement_id": { "type": "integer" },
+        "scope": { "type": "string" },
+        "person_ids": { "type": "array", "items": { "type": "integer" } }
+      }
+    },
+    "EntitySummary": {
+      "type": "object",
+      "required": ["id", "type", "name", "attrs"],
+      "properties": {
+        "id": { "type": "integer" },
+        "type": { "type": "string" },
+        "name": { "type": "string" },
+        "attrs": { "type": "object" }
+      }
+    },
+    "Fact": {
+      "type": "object",
+      "required": ["id", "entity_type", "entity_id", "statement", "kind", "scope", "created_at"],
+      "properties": {
+        "id": { "type": "integer" },
+        "entity_type": { "$ref": "#/$defs/EntityType" },
+        "entity_id": { "type": "integer" },
+        "statement": { "type": "string" },
+        "predicate": { "type": "string" },
+        "value": { "type": "string" },
+        "kind": { "$ref": "#/$defs/Kind" },
+        "scope": { "type": "string" },
+        "valid_from": { "type": "string" },
+        "superseded_by": { "type": "integer" },
+        "created_at": { "type": "string" }
+      }
+    },
+    "Reference": {
+      "type": "object",
+      "required": ["id", "target_type", "target_id", "system", "uri", "note", "scope", "created_at"],
+      "properties": {
+        "id": { "type": "integer" },
+        "target_type": { "$ref": "#/$defs/RefTargetType" },
+        "target_id": { "type": "integer" },
+        "system": { "type": "string", "description": "notion / box / minutes / mail / file / url など" },
+        "uri": { "type": "string" },
+        "title": { "type": "string" },
+        "note": { "type": "string", "description": "何が・どの粒度で・いつ時点の情報か" },
+        "snapshot": { "type": "string", "description": "登録時点の要点（到達不能時のフォールバック）" },
+        "scope": { "type": "string" },
+        "last_verified": { "type": "string" },
+        "created_at": { "type": "string" }
+      }
+    },
+    "GlossaryTerm": {
+      "type": "object",
+      "required": ["id", "term", "scope"],
+      "properties": {
+        "id": { "type": "integer" },
+        "term": { "type": "string" },
+        "reading": { "type": "string" },
+        "definition": { "type": "string" },
+        "engagement_id": { "type": "integer" },
+        "scope": { "type": "string" }
+      }
+    },
+    "Provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "出所。ref_id で既存 ref を指すか、system/uri/note（title/snapshot 任意）で新規 ref を承認時に登録する",
+      "properties": {
+        "ref_id": { "type": "integer" },
+        "system": { "type": "string" },
+        "uri": { "type": "string" },
+        "title": { "type": "string" },
+        "note": { "type": "string" },
+        "snapshot": { "type": "string" }
+      }
+    },
+    "Proposal": {
+      "type": "object",
+      "required": ["id", "action", "target_type", "patch", "kind", "scope", "proposed_by", "request_id", "status", "created_at"],
+      "properties": {
+        "id": { "type": "integer" },
+        "action": { "$ref": "#/$defs/ProposalAction" },
+        "target_type": { "$ref": "#/$defs/ProposalTargetType" },
+        "target_id": { "type": "integer" },
+        "patch": { "type": "object" },
+        "kind": { "$ref": "#/$defs/Kind" },
+        "scope": { "type": "string" },
+        "provenance": { "$ref": "#/$defs/Provenance" },
+        "provenance_id": { "type": "integer" },
+        "proposed_by": { "type": "string" },
+        "request_id": { "type": "string" },
+        "status": { "$ref": "#/$defs/ProposalStatus" },
+        "result_id": { "type": "integer" },
+        "decision_note": { "type": "string" },
+        "created_at": { "type": "string" },
+        "decided_at": { "type": "string" },
+        "decided_by": { "type": "string" }
+      }
+    },
+    "ApplyResult": {
+      "type": "object",
+      "required": ["target_type", "id"],
+      "properties": {
+        "target_type": { "$ref": "#/$defs/ProposalTargetType" },
+        "id": { "type": "integer" }
+      }
+    },
+    "PersonPatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "insert 時は name 必須。aliases は追加のみ",
+      "properties": {
+        "name": { "type": "string" },
+        "org_id": { "type": "integer" },
+        "role": { "type": "string" },
+        "aliases": { "type": "array", "items": { "$ref": "#/$defs/Alias" } },
+        "first_met": { "type": "string" },
+        "last_seen": { "type": "string" }
+      }
+    },
+    "OrganizationPatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "insert 時は name 必須",
+      "properties": {
+        "name": { "type": "string" },
+        "kind": { "type": "string" }
+      }
+    },
+    "EngagementPersonInput": {
+      "type": "object",
+      "required": ["person_id"],
+      "additionalProperties": false,
+      "properties": {
+        "person_id": { "type": "integer" },
+        "role": { "type": "string" }
+      }
+    },
+    "EngagementPatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "insert 時は name 必須。people は追加のみ",
+      "properties": {
+        "name": { "type": "string" },
+        "org_id": { "type": "integer" },
+        "status": { "type": "string" },
+        "started_at": { "type": "string" },
+        "ended_at": { "type": "string" },
+        "people": { "type": "array", "items": { "$ref": "#/$defs/EngagementPersonInput" } }
+      }
+    },
+    "InteractionPatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "insert 時は kind / occurred_at / summary 必須。person_ids は追加のみ",
+      "properties": {
+        "kind": { "type": "string" },
+        "occurred_at": { "type": "string" },
+        "summary": { "type": "string" },
+        "engagement_id": { "type": "integer" },
+        "person_ids": { "type": "array", "items": { "type": "integer" } }
+      }
+    },
+    "EntityPatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "insert 時は type / name 必須",
+      "properties": {
+        "type": { "type": "string" },
+        "name": { "type": "string" },
+        "attrs": { "type": "object" }
+      }
+    },
+    "FactPatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "insert / supersede 時は entity_type / entity_id / statement 必須。predicate はレジストリ（role / status / interest / decision）にあるときのみ許可し value 必須",
+      "properties": {
+        "entity_type": { "$ref": "#/$defs/EntityType" },
+        "entity_id": { "type": "integer" },
+        "statement": { "type": "string" },
+        "predicate": { "type": "string" },
+        "value": { "type": "string" },
+        "valid_from": { "type": "string" }
+      }
+    },
+    "RefPatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "insert 時は target_type / target_id / system / uri / note 必須（URI だけの参照は禁止）",
+      "properties": {
+        "target_type": { "$ref": "#/$defs/RefTargetType" },
+        "target_id": { "type": "integer" },
+        "system": { "type": "string" },
+        "uri": { "type": "string" },
+        "title": { "type": "string" },
+        "note": { "type": "string" },
+        "snapshot": { "type": "string" },
+        "last_verified": { "type": "string" }
+      }
+    },
+    "GlossaryPatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "insert 時は term 必須",
+      "properties": {
+        "term": { "type": "string" },
+        "reading": { "type": "string" },
+        "definition": { "type": "string" },
+        "engagement_id": { "type": "integer" }
+      }
+    },
+    "SearchEntity": {
+      "type": "object",
+      "required": ["type", "id", "name", "summary", "score", "matched_on", "facts", "refs"],
+      "properties": {
+        "type": { "$ref": "#/$defs/SearchEntityType" },
+        "id": { "type": "integer" },
+        "name": { "type": "string" },
+        "summary": { "type": "string" },
+        "score": { "type": "number" },
+        "matched_on": { "type": "array", "items": { "type": "string" } },
+        "facts": { "type": "array", "items": { "$ref": "#/$defs/Fact" } },
+        "refs": { "type": "array", "items": { "$ref": "#/$defs/Reference" } }
+      }
+    },
+    "SpeakerCandidate": {
+      "type": "object",
+      "required": ["person_id", "name", "confidence", "reason"],
+      "properties": {
+        "person_id": { "type": "integer" },
+        "name": { "type": "string" },
+        "confidence": { "type": "number" },
+        "reason": { "type": "string" }
+      }
+    },
+    "SpeakerResult": {
+      "type": "object",
+      "required": ["input", "normalized", "status", "confidence", "candidates"],
+      "properties": {
+        "input": { "type": "string" },
+        "normalized": { "type": "string" },
+        "status": { "$ref": "#/$defs/SpeakerStatus" },
+        "person": { "$ref": "#/$defs/PersonSummary" },
+        "confidence": { "type": "number" },
+        "candidates": { "type": "array", "items": { "$ref": "#/$defs/SpeakerCandidate" } }
+      }
+    },
+    "ServerProtocolInfo": {
+      "type": "object",
+      "required": ["transports"],
+      "properties": { "transports": { "type": "array", "items": { "type": "string" } } }
+    },
+    "SearchCapabilities": {
+      "type": "object",
+      "required": ["fts"],
+      "properties": { "fts": { "type": "string" } }
+    },
+    "ServerCapabilitiesInfo": {
+      "type": "object",
+      "required": ["tools", "resolvers", "search"],
+      "properties": {
+        "tools": { "type": "array", "items": { "type": "string" } },
+        "resolvers": { "type": "array", "items": { "type": "string" } },
+        "search": { "$ref": "#/$defs/SearchCapabilities" }
+      }
+    },
+    "ClientInfo": {
+      "type": "object",
+      "required": ["name", "role"],
+      "properties": {
+        "name": { "type": "string" },
+        "role": { "type": "string" },
+        "default_scope": { "type": "string" }
+      }
+    }
+  }
+}

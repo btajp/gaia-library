@@ -1,0 +1,19 @@
+{
+  "name": "get_server_info",
+  "title": "サーバー情報",
+  "description": "gaia_library の版・契約版（contract_version）・利用できる能力と、接続中クライアントの識別（name / role / default_scope）を返す。互換性確認と、どの scope が既定かの確認に使う。",
+  "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+  "inputSchema": { "type": "object", "additionalProperties": false, "properties": {} },
+  "outputSchema": {
+    "type": "object",
+    "required": ["name", "version", "contract_version", "protocol", "capabilities", "client"],
+    "properties": {
+      "name": { "type": "string" },
+      "version": { "type": "string" },
+      "contract_version": { "type": "string" },
+      "protocol": { "$ref": "../defs/common.json#/$defs/ServerProtocolInfo" },
+      "capabilities": { "$ref": "../defs/common.json#/$defs/ServerCapabilitiesInfo" },
+      "client": { "$ref": "../defs/common.json#/$defs/ClientInfo" }
+    }
+  }
+}
