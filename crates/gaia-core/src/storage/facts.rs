@@ -2,11 +2,13 @@
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::{
-    contracts::types::{Fact, FactPatch, Kind},
+    contracts::types::{EntityType, Fact, FactPatch, Kind},
     scope::ScopeSet,
 };
 
-use super::{StorageError, like_pattern, parse_db_enum, required, targets};
+use super::{
+    StorageError, engagements, interactions, like_pattern, parse_db_enum, required, targets,
+};
 
 const COLS: &str = "f.id, f.entity_type, f.entity_id, f.statement, f.predicate, f.value, f.kind, f.scope, f.valid_from, f.superseded_by, f.created_at";
 
@@ -24,6 +26,7 @@ pub fn insert(
         .ok_or_else(|| StorageError::Integrity("fact.entity_id is required".into()))?;
     let statement = required(patch.statement.as_deref(), "fact.statement")?;
     targets::ensure(conn, &entity_type.to_string(), entity_id)?;
+    ensure_content_target_in_scope(conn, entity_type, entity_id, scope)?;
     conn.execute(
         "INSERT INTO facts(entity_type, entity_id, statement, predicate, value, kind, scope, valid_from) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -39,6 +42,31 @@ pub fn insert(
         ],
     )?;
     Ok(conn.last_insert_rowid())
+}
+
+/// entity_type が内容層（engagement / interaction）のとき、ターゲット行が提案の scope 内に
+/// 存在することを検証する。person / organization / entity（名寄せ層）は共有のため未検査。
+fn ensure_content_target_in_scope(
+    conn: &Connection,
+    entity_type: EntityType,
+    entity_id: i64,
+    scope: &str,
+) -> Result<(), StorageError> {
+    if entity_type == EntityType::Engagement
+        && engagements::get(conn, entity_id, &ScopeSet::single(scope))?.is_none()
+    {
+        return Err(StorageError::NotFound(format!(
+            "{entity_type} {entity_id} (in scope `{scope}`)"
+        )));
+    }
+    if entity_type == EntityType::Interaction
+        && interactions::get(conn, entity_id, &ScopeSet::single(scope))?.is_none()
+    {
+        return Err(StorageError::NotFound(format!(
+            "{entity_type} {entity_id} (in scope `{scope}`)"
+        )));
+    }
+    Ok(())
 }
 
 /// 旧 fact を新 fact で置き換える（superseded_by リンク）。旧 fact は同じ scope 内・未置換であること。
@@ -212,7 +240,7 @@ fn convert(raw: RawFact) -> Result<Fact, StorageError> {
 mod tests {
     use super::*;
     use crate::{
-        contracts::types::PersonPatch,
+        contracts::types::{EngagementPatch, PersonPatch},
         storage::{Db, affiliations, people},
     };
     use serde_json::json;
@@ -268,6 +296,42 @@ mod tests {
             assert_eq!(current[0].id, new);
             assert_eq!(search(c, "マネージャー", &ScopeSet::single("cn"), 10)?.len(), 0, "置換済みは検索に出ない");
             assert!(matches!(supersede(c, old, &fp(json!({"entity_type": "person", "entity_id": pid, "statement": "x"})), Kind::Fact, "cn"), Err(StorageError::Integrity(_))));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn insert_rejects_engagement_target_from_a_different_scope() {
+        let db = Db::open_in_memory().unwrap();
+        db.with_conn::<_, StorageError>(|c| {
+            affiliations::insert(c, "cn", None)?;
+            affiliations::insert(c, "other", None)?;
+            let eid = engagements::insert(
+                c,
+                &serde_json::from_value::<EngagementPatch>(json!({"name": "案件X"})).unwrap(),
+                "other",
+            )?;
+            // scope を跨いだ engagement へのターゲットは拒否
+            assert!(matches!(
+                insert(
+                    c,
+                    &fp(json!({"entity_type": "engagement", "entity_id": eid, "statement": "x"})),
+                    Kind::Fact,
+                    "cn"
+                ),
+                Err(StorageError::NotFound(_))
+            ));
+            // 一致する scope なら成功
+            assert!(
+                insert(
+                    c,
+                    &fp(json!({"entity_type": "engagement", "entity_id": eid, "statement": "x"})),
+                    Kind::Fact,
+                    "other"
+                )
+                .is_ok()
+            );
             Ok(())
         })
         .unwrap();

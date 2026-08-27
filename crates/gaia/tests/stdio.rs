@@ -125,6 +125,10 @@ fn agent_sees_filtered_tools_and_calls_search() {
         !names.contains(&"approve_proposal"),
         "agent には承認系が見えない: {names:?}"
     );
+    assert!(
+        !names.contains(&"reject_proposal"),
+        "agent には reject_proposal も見えない: {names:?}"
+    );
     assert!(!names.contains(&"resolve_source"), "未登録ツールは見えない");
 
     let called = s.request(
