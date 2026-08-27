@@ -386,12 +386,11 @@ mod tests {
         );
         assert_eq!(out["people"][0]["role"], "key_person");
         assert_eq!(out["glossary"][0]["term"], "SCIM");
-        assert_eq!(
+        assert!(
             out["facts"][0]["statement"]
                 .as_str()
                 .unwrap()
-                .contains("SCIM"),
-            true
+                .contains("SCIM")
         );
         // fact の根拠参照（minutes）が refs に載る
         assert!(
