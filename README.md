@@ -61,3 +61,67 @@ gaia add person --name "岡村 慎太郎" --alias okash1n   # 手入力（提案
 gaia search "Okta"                                     # 回答の設計図を得る
 gaia proposals && gaia approve <id>                    # エージェントの提案を承認
 ```
+
+承認・却下も既定 scope 内だけを対象にする。別の scope を扱う場合は `gaia approve <id> --scope <所属元名>` / `gaia reject <id> --scope <所属元名>` のように明示する。
+`propose --request-id` の再送は、同じクライアント・scope・提案内容の場合だけ重複として扱い、異なる内容での再利用は `conflict` になる。
+
+## デスクトップアプリ（Apple Silicon macOS）
+
+Rust と `toolchain.json` に記載した Bun / Tauri CLI が必要。`desktop/src-tauri` は root の Cargo workspace とは別プロジェクトである。
+
+```sh
+./desktop/build-app.sh
+cd desktop/src-tauri
+cargo build --all-features --locked
+cargo fmt --check
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --all-features --locked
+cargo tauri build --bundles app --no-sign --ci
+```
+
+ローカル確認用アプリは `desktop/src-tauri/target/release/bundle/macos/gaia-library.app` に生成される。
+`--no-sign` は配布用の署名・公証を行わない。同梱 CLI と UI が必要なため、初回の Rust 検証より先に `build-app.sh` を実行する。
+UI の型検証は `build-app.sh` に含む。回帰テストは `cd desktop/ui && bun test`、リリース用の隔離テストはリポジトリ直下の `bun test scripts` で実行できる。
+`--all-features` は検証用 CLI も検査するために指定する。アプリ生成の `cargo tauri build` には付けない。検証用 CLI は `updater-verifier` feature でのみ有効にし、配布アプリには同梱しない。
+
+初回起動では、所属元名（情報を分ける scope）とユーザー名を入力する。
+human `desktop:<ユーザー名>` と agent `claude-code` を作成し、agent のキーだけを発行する。既存設定は上書きせず読み込む。不正な設定や human を選べない状態はエラーとして表示する。
+
+- 検索・詳細・提案・手入力は CLI と同じ `ToolService` を呼ぶ。scope は画面上部で選び、空欄なら起動した human の既定値を使う。
+- 手入力も提案を作成してから承認する。承認だけが失敗した場合は、画面に残る提案 ID を使って再試行する。
+- 参照 URI はコピーのみ。参照先を自動で開かない。現行 facts や検索結果には取得上限があり、全履歴・総件数・ページ送りには未対応。
+- HTTP は `127.0.0.1` だけで待ち受ける。キー未発行やポート競合でも画面は使える。設定画面に表示された実際の URL を接続に使う。
+- ウィンドウを閉じても常駐を続ける。終了はアプリメニューまたはトレイの「終了」。二重起動は既存ウィンドウを表示する。
+
+### 設定と接続キー
+
+設定画面で所属元・クライアントを追加し、キーを発行・再発行できる。再発行後は旧キーが使えなくなるため、接続先クライアントの設定も更新する。
+クライアント管理・キー再発行は CLI と設定画面で同時に実行しない。別プロセス間は最後の設定保存が優先されるため、成功と返った追加や再発行も取り消され、旧キーが再び使える状態になる場合がある。
+平文キーは macOS Keychain に保管し、失敗した場合はデータディレクトリの `keys/` 内の 0600 ファイルへ保存する。保存場所を画面に表示する。ファイル名はクライアント名の SHA-256、ディレクトリは 0700。
+両方の保管に失敗した場合も発行したキーを表示するので、画面を閉じる前に安全な場所へコピーする。ブラウザの localStorage には保存しない。
+
+「接続設定」で HTTP / stdio の JSON を再表示・コピーできる。HTTP は現在の設定ハッシュと一致したキーだけを復元し、起動中サーバーの実 URL を使う。
+CLI で再発行したキーはアプリの Keychain には保存されない。復元できない場合は、CLI で保存したキーを使うか、アプリから再発行する。
+stdio の設定には同梱 CLI、設定ファイル、実際に開いた DB の絶対パスが入る。
+
+CLI のリンクは設定画面の明示操作で `~/.local/bin/gaia` に作成する。通常ファイルは上書きしない。既存の別リンクは行き先を確認してから張り替える。表示後にリンク先が変わった場合は変更せず中止し、再読込・再確認を求める。
+`~/.local/bin` が PATH に入っている場合は、新しいターミナルで `gaia --help` を確認する。PATH はアプリから変更しない。
+
+### 自動更新とリリース
+
+起動時と「アップデートを確認」で GitHub Releases を確認する。更新は確認後にダウンロードし、署名を検証して適用する。再起動のタイミングも選択できる。
+初回リリース前やオフライン時の起動時チェック失敗は画面を妨げない。手動チェックでは確認できなかったことを表示する。
+
+配布用リリースは、次の条件を満たした push 済み・未変更の `main` からだけ実行する。
+
+- `desktop/e2e-updater/README.md` の隔離された旧版→新版更新テストを完了する。
+- `~/.tauri/gaia-library-updater.key` と同名の `.pub` をバックアップする。秘密鍵は上書きしない。
+- `~/.config/gaia-library/release.env` に Developer ID と Apple 公証用 API 資格情報を設定し、0600 にする。未作成ならスクリプトが空欄のテンプレートを作成して停止する。
+- Cargo workspace、desktop、Tauri 設定、CHANGELOG の版数をそろえ、対象タグを未使用にする。
+
+```sh
+./scripts/release-desktop.sh 0.1.0
+```
+
+スクリプトはビルド・テスト、Developer ID 署名、公証、updater 署名を確認し、5 個の配布ファイルを draft に添付してから公開する。ローカル `.app` の生成だけではリリース完了にならない。
+鍵変更は `--allow-pubkey-rotation` を指定し、旧鍵で署名する橋渡しリリースに限る。新しい公開鍵だけへ直接切り替えると既存アプリが更新を受け取れなくなる。
