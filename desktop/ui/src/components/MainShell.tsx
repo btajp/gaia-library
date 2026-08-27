@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useServerStatus } from "../hooks/useServerStatus";
+import type { DetailTarget, OpenDetail } from "../types";
+import Search from "./Search";
+import Detail from "./Detail";
 
 const TABS = [
   { id: "search", label: "検索" },
@@ -15,6 +18,17 @@ type WorkspaceProps = {
   scope: string;
 };
 
+function SearchWorkspace({ scope }: { scope: string }) {
+  const [detail, setDetail] = useState<DetailTarget | null>(null);
+  const openDetail: OpenDetail = (type, id) => setDetail({ type, id });
+  return (
+    <>
+      <div hidden={detail !== null}><Search scope={scope} openDetail={openDetail} /></div>
+      {detail && <Detail target={detail} scope={scope} onBack={() => setDetail(null)} openDetail={openDetail} />}
+    </>
+  );
+}
+
 function Workspace({ tab, scope }: WorkspaceProps) {
   const label = TABS.find((item) => item.id === tab)?.label;
   return (
@@ -25,11 +39,13 @@ function Workspace({ tab, scope }: WorkspaceProps) {
       tabIndex={0}
       className="rounded-lg border border-neutral-800 bg-neutral-900 p-6"
     >
-      <h2 className="text-xl font-semibold">{label}</h2>
-      <p className="mt-3 text-sm text-neutral-400">この画面は準備中です。</p>
-      <p className="mt-2 text-sm text-neutral-400">
-        対象 scope: {scope.trim() || "クライアントの既定値"}
-      </p>
+      {tab === "search" ? <SearchWorkspace scope={scope} /> : (
+        <>
+          <h2 className="text-xl font-semibold">{label}</h2>
+          <p className="mt-3 text-sm text-neutral-400">この画面は準備中です。</p>
+          <p className="mt-2 text-sm text-neutral-400">対象 scope: {scope || "クライアントの既定値"}</p>
+        </>
+      )}
     </section>
   );
 }
@@ -71,6 +87,7 @@ export default function MainShell() {
   }
 
   const statusError = error ?? status?.error;
+  const effectiveScope = scope.trim() || status?.default_scope || "";
 
   return (
     <main className="min-h-screen bg-neutral-950 text-neutral-100">
@@ -154,7 +171,7 @@ export default function MainShell() {
             </button>
           ))}
         </nav>
-        <Workspace tab={tab} scope={scope} />
+        <Workspace key={`${tab}:${effectiveScope}`} tab={tab} scope={effectiveScope} />
       </div>
     </main>
   );

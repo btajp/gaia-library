@@ -1,9 +1,7 @@
-import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { beforeEach, describe, expect, it } from "bun:test";
 import { createElement, StrictMode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-
-const invoke = mock(() => Promise.resolve(undefined));
-mock.module("@tauri-apps/api/core", () => ({ invoke }));
+import { invoke } from "./test/tauriMock";
 
 const api = await import("./api");
 const { default: App } = await import("./App");
