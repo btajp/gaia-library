@@ -465,8 +465,8 @@ MCP への写像:
 
 ### 8.4 提案系ツール
 
-**propose_update** — 入力: `target_type`（`person` / `organization` / `engagement` / `interaction` / `entity` / `fact` / `ref` / `glossary`）、`action`（`insert` / `update` / `supersede`）、`target_id?`、`patch`（target_type ごとの `Patch*`。契約上は自由なオブジェクトで、ハンドラが target_type に応じて型付きで検証する）、`kind`、`scope?`（省略時はクライアントの既定 scope。単一の scope 名）、`provenance?`（`{ ref_id }` で既存 ref を指すか、`{ system, uri, title?, note, snapshot? }` で新規 ref を承認時に同時登録。新規 ref の紐付け先は承認で生成・更新されたレコードなので、`ref` / `glossary` を対象とする提案では `ref_id` 形式のみ受け付ける）、`request_id`（string。8 文字以上をハンドラで検証）。
-処理: `request_id` が既存なら同一 `proposed_by` のとき既存の提案を `duplicate: true` で返し、別のクライアントなら `conflict`。それ以外は `pending` で登録し、`audit_log(propose)`。`provenance` は既存 ref の id ならその存在を確認して `provenance_id` に入れ、新規 ref の内容なら `provenance`（JSON）に保持して承認時に refs へ書く。
+**propose_update** — 入力: `target_type`（`person` / `organization` / `engagement` / `interaction` / `entity` / `fact` / `ref` / `glossary`）、`action`（`insert` / `update` / `supersede`）、`target_id?`、`patch`（target_type ごとの `Patch*`。契約上は自由なオブジェクトで、ハンドラが target_type に応じて型付きで検証する）、`kind`、`scope?`（省略時はクライアントの既定 scope。単一の scope 名）、`provenance?`（`{ ref_id }` で既存 ref を指すか、`{ system, uri, title?, note, snapshot? }` で新規 ref を承認時に同時登録。新規 ref の紐付け先は承認で生成・更新されたレコードなので、`ref` / `glossary` を対象とする提案では `ref_id` 形式のみ受け付ける）、`request_id`（string。8 文字以上かつ UTF-8 で 256 bytes 以下をハンドラで検証）。
+処理: `request_id` が既存なら、`proposed_by` と送信内容（`target_type` / `action` / `target_id` / `patch` / `kind` / `scope` / `provenance`）がすべて一致するときだけ既存の提案を `duplicate: true` で返す。所有クライアントまたは送信内容が異なる場合は `conflict` とし、`audit_log(propose_conflict)` に残す。それ以外は `pending` で登録し、`audit_log(propose)`。`patch` と `provenance` の JSON 直列化後の合計は 1 MiB 以下、同一クライアント・scope の未決提案は 1,000 件未満とし、完全一致の再送判定はこの上限判定より先に行う。`provenance` は既存 ref の id ならその存在を確認して `provenance_id` に入れ、新規 ref の内容なら `provenance`（JSON）に保持して承認時に refs へ書く。
 出力 `{ proposal_id, status, duplicate }`。
 
 `Patch*` の形:
@@ -479,7 +479,7 @@ MCP への写像:
 | interaction | `kind`, `occurred_at`, `summary`, `engagement_id?`, `person_ids?` | 任意部分集合 |
 | entity | `type`, `name`, `attrs?` | 任意部分集合 |
 | fact | `entity_type`, `entity_id`, `statement`, `predicate?`, `value?`, `valid_from?` | `statement?`, `predicate?`, `value?`, `valid_from?`（`supersede` は insert と同じ形で、`target_id` が旧 fact） |
-| ref | `target_type`, `target_id`, `system`, `uri`, `title?`, `note`, `snapshot?`, `last_verified?` | 任意部分集合 |
+| ref | `target_type`, `target_id`, `system`, `uri`, `title?`, `note`, `snapshot?`, `last_verified?` | `system?`, `uri?`, `title?`, `note?`, `snapshot?`, `last_verified?`（`target_type` / `target_id` は不変） |
 | glossary | `term`, `reading?`, `definition?`, `engagement_id?` | 任意部分集合 |
 
 `supersede` は `fact` のみ。`person` / `organization` / `entity` は名寄せ層なので `scope` は提案の文脈（監査用）としてのみ使い、レコードには保存しない。

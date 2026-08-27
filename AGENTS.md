@@ -34,11 +34,11 @@
 - 参照系（readOnlyHint）: search_context / get_person / get_organization / get_engagement / get_glossary / resolve_speakers（実装済み・登録済み）/ resolve_source（契約のみ。未登録）
 - 提案系: propose_update / list_proposals / approve_proposal（human）/ reject_proposal（human）
 - 共通: get_server_info / get_job_status（v1 は常に not_found）
-- 書き込みはクライアント発番の request_id で冪等化。エラーは構造化コード（not_found / scope_denied / unauthorized / invalid_params / contract_mismatch / conflict / busy / not_implemented / internal）
+- 書き込みはクライアント発番の request_id（8 文字以上・256 bytes 以下）と送信内容の完全一致で冪等化（不一致の再利用は conflict）。提案 JSON は 1 MiB 以下、同一クライアント・scope の未決提案は 1,000 件未満。エラーは構造化コード（not_found / scope_denied / unauthorized / invalid_params / contract_mismatch / conflict / busy / not_implemented / internal）
 
 ## 開発ルール
 - テスト: `cargo test --workspace`。lint: `cargo fmt --all --check` と `cargo clippy --workspace --all-targets -- -D warnings`
-- `scripts/dev.sh` は narumi をサブプロセス起動する（NARUMI_BIN 未設定ならスキップ）。narumi 無しでも全テストが通ること（任意依存）
+- `scripts/dev.sh` は narumi の HTTP server をサブプロセス起動する（`NARUMI_BIN` 未設定ならスキップ、port は `NARUMI_PORT`、既定 8765）。narumi 無しでも全テストが通ること（任意依存）
 - 契約の書き方: `contracts/tools/<name>.json` は MCP の Tool オブジェクト 1 つ。共通型は `../defs/common.json#/$defs/X` で参照。`minLength` / `minimum` / `maximum` / `pattern` / `format` / `if` / `prefixItems` は使わない（typify の制約）。enum は必ず `$defs` に定義する
 - FTS: `INSERT OR REPLACE` 禁止（`ON CONFLICT DO UPDATE` を使う）。同期はトリガで行う
 - 検索は person_aliases の完全一致（正規化済み別行）＋ facts_fts（trigram。3 文字未満は LIKE）の併用
