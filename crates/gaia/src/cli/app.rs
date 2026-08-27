@@ -14,8 +14,7 @@ use gaia_core::{
 };
 
 pub struct App {
-    /// 現時点のコマンドでは未参照。今後の診断コマンド向けに公開インターフェースとして保持する。
-    #[allow(dead_code)]
+    /// HTTP 認証が起動中に再読込する設定ファイル。
     pub config_path: PathBuf,
     pub config: Config,
     pub service: ToolService,

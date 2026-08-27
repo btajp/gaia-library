@@ -1,6 +1,7 @@
 //! CLI。全コマンドが ToolService::call を経由する（例外は init / affiliation / client の管理系のみ）。
 mod admin_cmd;
 mod app;
+mod mcp_config;
 mod query;
 mod serve;
 mod write;
@@ -124,13 +125,9 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
             admin_cmd::client(&path, cmd, compact)
         }
         Command::Serve(args) => {
-            let client = cli.client.as_deref().ok_or_else(|| {
-                gaia_core::error::ToolError::unauthorized(
-                    "stdio サーバーは接続主体を固定するため --client <name> が必須です",
-                )
-            })?;
+            serve::validate_args(args, cli.client.as_deref())?;
             let app = app::App::open(cli.config.as_ref())?;
-            serve::serve(app, client, args)
+            serve::serve(app, cli.client.as_deref(), args, compact)
         }
         Command::Affiliation { cmd } => {
             let app = app::App::open(cli.config.as_ref())?;

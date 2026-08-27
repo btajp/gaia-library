@@ -493,7 +493,7 @@ MCP への写像:
 
 ### 8.5 共通ツール
 
-**get_server_info** — 入力なし。出力 `{ name: "gaia_library", version, contract_version, protocol: { transports: ["stdio"] }, capabilities: { tools: [可視ツール名], resolvers: [], search: { fts: "trigram" } }, client: { name, role, default_scope } }`。
+**get_server_info** — 入力なし。出力 `{ name: "gaia_library", version, contract_version, protocol: { transports: ["stdio", "http"] }, capabilities: { tools: [可視ツール名], resolvers: [], search: { fts: "trigram" } }, client: { name, role, default_scope } }`。
 
 **get_job_status** — 入力 `job_id`。v1 にはジョブが無いので常に `not_found`。契約上は narumi 側と共通規約を揃えるために置く。
 

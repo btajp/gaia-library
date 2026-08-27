@@ -7,13 +7,13 @@
 ## 技術スタック
 - Rust（edition 2024、MSRV 1.95）。MCP は公式 rust-sdk（rmcp 3.x）、DB は rusqlite（bundled。FTS5 trigram）。検索の格上げ経路は lindera-sqlite（形態素解析。実際に検索が失敗し始めるまで入れない）
 - contracts/: JSON Schema（1 ツール 1 ファイル＋共通 defs、contract_version=semver）。契約が正本。変更は契約 → `cargo build` → 実装の順。型生成は typify（build.rs。生成物はコミットしない）
-- トランスポート: ローカル常駐 Streamable HTTP（今後）。現在は stdio（`gaia serve --stdio --client <name>`）
+- トランスポート: ローカル常駐 Streamable HTTP（`gaia serve --http`、127.0.0.1 限定）と stdio（`gaia serve --stdio --client <name>`）
 
 ## リポ構成（workspace）
 - crates/gaia-core: 契約ロード（`contracts::Catalog`）・SQLite（`storage`）・ドメイン（`domain`）・scope（`scope::ScopeSet`）・`tools::ToolService`。rmcp を知らない
-- crates/gaia-mcp: rmcp の `ServerHandler` 手動実装と stdio 起動。依存は gaia-core のみ
+- crates/gaia-mcp: rmcp の `ServerHandler` 手動実装、stdio / HTTP 起動、Bearer 認証とセッション所有者の検査。プロジェクト内依存は gaia-core のみ
 - crates/gaia: CLI `gaia`。全コマンドが `ToolService::call` を呼ぶ（設定ファイルと `affiliations` の管理コマンドだけが例外）
-- 依存方向は gaia → gaia-mcp → gaia-core の一方向。gaia-mcp と gaia は `ToolService` / `contracts` / `config` / `identity` / `admin` / `storage::Db` / `error` 以外の core API を使わない
+- 依存方向は gaia → gaia-mcp → gaia-core の一方向。gaia-mcp と gaia は `ToolService` / `contracts` / `config` / `identity` / `auth` / `admin` / `storage::Db` / `error` 以外の core API を使わない
 
 ## データモデル（DDL v1）
 - 名寄せ層（共有・scope なし）: people / person_aliases / organizations / entities / affiliations（scope の値域定義）
@@ -28,7 +28,7 @@
 2. scope は default deny / explicit allow。内容層の SELECT には必ず `scope IN (SELECT value FROM json_each(?))` を付ける。複数 scope の明示指定時のみ横断し、横断は audit_log(cross_scope_read) に記録。省略時はクライアントの default_scope を使う
 3. 参照は必ず解決可能に: 辿れない参照だけを返すサーバーにしない。到達不能時は要点スナップショットをフォールバックに。到達可能性 > 正本一元化（二重管理は許容）
 4. RAG・埋め込みは入れない（FTS で実際に困るまで）
-5. stdio の役割分離は「エージェントが MCP 経由で誤って承認する」ことを防ぐ仕組みであり、同一 OS ユーザーのシェルから human 識別で起動することは防げない。API キー検証は HTTP 実装時に追加する
+5. stdio の役割分離は「エージェントが MCP 経由で誤って承認する」ことを防ぐ仕組みであり、同一 OS ユーザーのシェルから human 識別で起動することは防げない。HTTP は全リクエストで Bearer を検証し、セッションをクライアント名に結び付ける。キーはハッシュだけを設定に保存し、再発行はサーバー再起動なしで反映する
 
 ## 公開ツール（v1 契約、contracts/manifest.json が正本）
 - 参照系（readOnlyHint）: search_context / get_person / get_organization / get_engagement / get_glossary / resolve_speakers（実装済み・登録済み）/ resolve_source（契約のみ。未登録）

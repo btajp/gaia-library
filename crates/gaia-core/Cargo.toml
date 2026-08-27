@@ -8,10 +8,13 @@ build = "build.rs"
 
 [dependencies]
 jsonschema.workspace = true
+rand.workspace = true
 rusqlite.workspace = true
 rusqlite_migration.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 tracing.workspace = true
