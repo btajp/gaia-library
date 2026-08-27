@@ -73,7 +73,11 @@ pub fn handle(
             }
         }
         // facts 全文ヒット → 親エンティティに折りたたむ
-        for f in facts::search(c, &query, &scopes, limit * 2)? {
+        // storage が返す BM25 / LIKE 順を単調減少の score にし、先頭の従来値 1.0 は保つ。
+        for (rank, f) in facts::search(c, &query, &scopes, limit * 2)?
+            .into_iter()
+            .enumerate()
+        {
             let et: SearchEntityType = f
                 .entity_type
                 .to_string()
@@ -90,7 +94,16 @@ pub fn handle(
                 continue;
             }
             if let Some((name, summary)) = entity_headline(c, &f, &scopes)? {
-                add(&mut hits, et, f.entity_id, name, summary, 1.0, &format!("fact:{}", f.id));
+                let score = 1.0 / (rank as f64 + 1.0);
+                add(
+                    &mut hits,
+                    et,
+                    f.entity_id,
+                    name,
+                    summary,
+                    score,
+                    &format!("fact:{}", f.id),
+                );
             }
         }
 
@@ -181,4 +194,99 @@ fn add(
     });
     entry.score += score;
     entry.matched_on.push(matched.to_string());
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::tools::test_support::{agent, service, write};
+
+    #[test]
+    fn fact_rank_affects_final_entity_order() {
+        let service = service();
+        let alpha = write(
+            &service,
+            "entity",
+            json!({"type": "topic", "name": "Alpha"}),
+        );
+        let zulu = write(&service, "entity", json!({"type": "topic", "name": "Zulu"}));
+        write(
+            &service,
+            "fact",
+            json!({
+                "entity_type": "entity",
+                "entity_id": alpha,
+                "statement": "rankingneedle is mentioned once among several filler words"
+            }),
+        );
+        write(
+            &service,
+            "fact",
+            json!({
+                "entity_type": "entity",
+                "entity_id": zulu,
+                "statement": "rankingneedle rankingneedle rankingneedle"
+            }),
+        );
+
+        let out = service
+            .call(
+                &agent(),
+                "search_context",
+                json!({"query": "rankingneedle", "types": ["entity"]}),
+            )
+            .unwrap();
+        let entities = out["entities"].as_array().unwrap();
+
+        assert_eq!(entities.len(), 2);
+        assert_eq!(entities[0]["id"], zulu);
+        assert_eq!(entities[1]["id"], alpha);
+        assert!(entities[0]["score"].as_f64().unwrap() > entities[1]["score"].as_f64().unwrap());
+    }
+
+    #[test]
+    fn fact_scores_accumulate_with_name_score() {
+        let service = service();
+        let entity = write(
+            &service,
+            "entity",
+            json!({"type": "topic", "name": "rankingneedle aggregate"}),
+        );
+        for statement in [
+            "rankingneedle appears in the primary fact",
+            "rankingneedle appears in the secondary fact",
+        ] {
+            write(
+                &service,
+                "fact",
+                json!({
+                    "entity_type": "entity",
+                    "entity_id": entity,
+                    "statement": statement
+                }),
+            );
+        }
+
+        let out = service
+            .call(
+                &agent(),
+                "search_context",
+                json!({"query": "rankingneedle", "types": ["entity"]}),
+            )
+            .unwrap();
+        let hit = &out["entities"][0];
+        let matched_on = hit["matched_on"].as_array().unwrap();
+
+        assert_eq!(hit["id"], entity);
+        assert!(hit["score"].as_f64().unwrap() > 4.0);
+        assert!(matched_on.iter().any(|matched| matched == "name"));
+        assert_eq!(
+            matched_on
+                .iter()
+                .filter(|matched| matched.as_str().unwrap().starts_with("fact:"))
+                .count(),
+            2
+        );
+    }
 }

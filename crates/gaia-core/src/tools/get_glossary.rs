@@ -31,7 +31,7 @@ pub fn handle(
             }
         }
         if let Some(eid) = input.engagement_id {
-            for m in engagements::members(c, eid)? {
+            for m in engagements::members(c, eid, &scopes)? {
                 hints.push(m.person.name.clone());
                 for a in &m.person.aliases {
                     hints.push(a.alias.clone());

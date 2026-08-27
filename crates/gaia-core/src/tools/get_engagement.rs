@@ -39,7 +39,7 @@ pub fn handle(
             Some(oid) => organizations::get(c, oid)?,
             None => None,
         };
-        let member_list = engagements::members(c, engagement.id)?;
+        let member_list = engagements::members(c, engagement.id, &scopes)?;
         let fact_list = facts::for_entity(c, "engagement", engagement.id, &scopes, 50)?;
         let mut ref_list = refs::for_target(c, "engagement", engagement.id, &scopes)?;
         for f in &fact_list {

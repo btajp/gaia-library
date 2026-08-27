@@ -106,12 +106,18 @@ pub fn find_by_name(
 pub fn members(
     conn: &Connection,
     engagement_id: i64,
+    scopes: &ScopeSet,
 ) -> Result<Vec<EngagementPerson>, StorageError> {
     let mut stmt = conn.prepare(
-        "SELECT person_id, role FROM engagement_people WHERE engagement_id = ?1 ORDER BY person_id",
+        "SELECT ep.person_id, ep.role FROM engagement_people ep \
+         JOIN engagements e ON e.id = ep.engagement_id \
+         WHERE ep.engagement_id = ?1 AND e.scope IN (SELECT value FROM json_each(?2)) \
+         ORDER BY ep.person_id",
     )?;
     let pairs: Vec<(i64, Option<String>)> = stmt
-        .query_map(params![engagement_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .query_map(params![engagement_id, scopes.as_json()], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?
         .collect::<Result<_, _>>()?;
     let mut out = Vec::with_capacity(pairs.len());
     for (pid, role) in pairs {
@@ -122,12 +128,19 @@ pub fn members(
     Ok(out)
 }
 
-pub fn member_ids(conn: &Connection, engagement_id: i64) -> Result<Vec<i64>, StorageError> {
+pub fn member_ids(
+    conn: &Connection,
+    engagement_id: i64,
+    scopes: &ScopeSet,
+) -> Result<Vec<i64>, StorageError> {
     let mut stmt = conn.prepare(
-        "SELECT person_id FROM engagement_people WHERE engagement_id = ?1 ORDER BY person_id",
+        "SELECT ep.person_id FROM engagement_people ep \
+         JOIN engagements e ON e.id = ep.engagement_id \
+         WHERE ep.engagement_id = ?1 AND e.scope IN (SELECT value FROM json_each(?2)) \
+         ORDER BY ep.person_id",
     )?;
     Ok(stmt
-        .query_map(params![engagement_id], |r| r.get(0))?
+        .query_map(params![engagement_id, scopes.as_json()], |r| r.get(0))?
         .collect::<Result<_, _>>()?)
 }
 
@@ -209,8 +222,12 @@ mod tests {
             let id = insert(c, &patch, "cn")?;
             assert!(get(c, id, &ScopeSet::single("cn"))?.is_some());
             assert!(get(c, id, &ScopeSet::single("other"))?.is_none(), "scope 外からは見えない");
-            assert_eq!(members(c, id)?.len(), 1);
-            assert_eq!(member_ids(c, id)?, vec![pid]);
+            let cn = ScopeSet::single("cn");
+            let other = ScopeSet::single("other");
+            assert_eq!(members(c, id, &cn)?.len(), 1);
+            assert_eq!(member_ids(c, id, &cn)?, vec![pid]);
+            assert!(members(c, id, &other)?.is_empty());
+            assert!(member_ids(c, id, &other)?.is_empty());
             assert_eq!(for_person(c, pid, &ScopeSet::single("cn"))?.len(), 1);
             assert_eq!(search_like(c, "RELATIONS", &ScopeSet::single("cn"), 10)?.len(), 1);
             assert!(matches!(

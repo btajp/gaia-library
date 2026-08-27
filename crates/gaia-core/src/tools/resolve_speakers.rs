@@ -27,7 +27,7 @@ pub fn handle(
                 if engagements::get(c, eid, &scopes)?.is_none() {
                     return Err(ToolError::not_found(format!("engagement {eid}")));
                 }
-                engagements::member_ids(c, eid)?
+                engagements::member_ids(c, eid, &scopes)?
             }
             None => Vec::new(),
         };

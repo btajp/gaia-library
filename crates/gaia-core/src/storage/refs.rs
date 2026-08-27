@@ -84,10 +84,30 @@ pub fn update(
             "ref {id} (in scope `{scope}`)"
         )));
     }
+    if patch.target_type.is_some() || patch.target_id.is_some() {
+        return Err(StorageError::Integrity(
+            "ref update cannot change target_type or target_id".into(),
+        ));
+    }
+    let system = patch
+        .system
+        .as_deref()
+        .map(|value| required(Some(value), "ref.system"))
+        .transpose()?;
+    let uri = patch
+        .uri
+        .as_deref()
+        .map(|value| required(Some(value), "ref.uri"))
+        .transpose()?;
+    let note = patch
+        .note
+        .as_deref()
+        .map(|value| required(Some(value), "ref.note"))
+        .transpose()?;
     conn.execute(
         "UPDATE refs SET system = COALESCE(?2, system), uri = COALESCE(?3, uri), title = COALESCE(?4, title), \
          note = COALESCE(?5, note), snapshot = COALESCE(?6, snapshot), last_verified = COALESCE(?7, last_verified) WHERE id = ?1",
-        params![id, patch.system, patch.uri, patch.title, patch.note, patch.snapshot, patch.last_verified],
+        params![id, system, uri, patch.title, note, patch.snapshot, patch.last_verified],
     )?;
     Ok(())
 }
@@ -221,6 +241,61 @@ mod tests {
             assert_eq!(refs.len(), 1);
             assert_eq!(refs[0].id, rid);
             assert_eq!(refs[0].snapshot.as_deref(), Some("SSO 導入を決定"));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn update_rejects_link_changes_and_blank_required_fields() {
+        let db = Db::open_in_memory().unwrap();
+        db.with_conn::<_, StorageError>(|c| {
+            affiliations::insert(c, "cn", None)?;
+            let pid = people::insert(
+                c,
+                &serde_json::from_value::<PersonPatch>(json!({"name": "岡村"})).unwrap(),
+            )?;
+            let id = insert(
+                c,
+                &serde_json::from_value::<RefPatch>(json!({
+                    "target_type": "person",
+                    "target_id": pid,
+                    "system": "notion",
+                    "uri": "https://example.com/source",
+                    "note": "根拠"
+                }))
+                .unwrap(),
+                "cn",
+            )?;
+
+            assert!(matches!(
+                update(
+                    c,
+                    id,
+                    &serde_json::from_value::<RefPatch>(json!({"target_id": pid})).unwrap(),
+                    "cn"
+                ),
+                Err(StorageError::Integrity(_))
+            ));
+            for patch in [
+                json!({"system": "  "}),
+                json!({"uri": "  "}),
+                json!({"note": "  "}),
+            ] {
+                assert!(matches!(
+                    update(
+                        c,
+                        id,
+                        &serde_json::from_value::<RefPatch>(patch).unwrap(),
+                        "cn"
+                    ),
+                    Err(StorageError::Integrity(_))
+                ));
+            }
+            let got = get(c, id, &ScopeSet::single("cn"))?.unwrap();
+            assert_eq!(got.system, "notion");
+            assert_eq!(got.uri, "https://example.com/source");
+            assert_eq!(got.note, "根拠");
             Ok(())
         })
         .unwrap();

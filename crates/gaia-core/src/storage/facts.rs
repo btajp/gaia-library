@@ -84,6 +84,17 @@ pub fn supersede(
             "fact {old_id} is already superseded by {by}"
         )));
     }
+    let entity_type = patch
+        .entity_type
+        .ok_or_else(|| StorageError::Integrity("fact.entity_type is required".into()))?;
+    let entity_id = patch
+        .entity_id
+        .ok_or_else(|| StorageError::Integrity("fact.entity_id is required".into()))?;
+    if entity_type != old.entity_type || entity_id != old.entity_id {
+        return Err(StorageError::Integrity(
+            "superseding fact must keep the same entity_type and entity_id".into(),
+        ));
+    }
     let new_id = insert(conn, patch, kind, scope)?;
     conn.execute(
         "UPDATE facts SET superseded_by = ?2 WHERE id = ?1",
@@ -98,16 +109,34 @@ pub fn update(
     patch: &FactPatch,
     scope: &str,
 ) -> Result<(), StorageError> {
-    if get(conn, id, &ScopeSet::single(scope))?.is_none() {
-        return Err(StorageError::NotFound(format!(
-            "fact {id} (in scope `{scope}`)"
+    let current = get(conn, id, &ScopeSet::single(scope))?
+        .ok_or_else(|| StorageError::NotFound(format!("fact {id} (in scope `{scope}`)")))?;
+    if let Some(by) = current.superseded_by {
+        return Err(StorageError::Integrity(format!(
+            "fact {id} is historical and cannot be updated; superseded by {by}"
         )));
     }
-    conn.execute(
+    if patch.entity_type.is_some() || patch.entity_id.is_some() {
+        return Err(StorageError::Integrity(
+            "fact update cannot change entity_type or entity_id".into(),
+        ));
+    }
+    let statement = patch
+        .statement
+        .as_deref()
+        .map(|value| required(Some(value), "fact.statement"))
+        .transpose()?;
+    let updated = conn.execute(
         "UPDATE facts SET statement = COALESCE(?2, statement), predicate = COALESCE(?3, predicate), \
-         value = COALESCE(?4, value), valid_from = COALESCE(?5, valid_from) WHERE id = ?1",
-        params![id, patch.statement, patch.predicate, patch.value, patch.valid_from],
+         value = COALESCE(?4, value), valid_from = COALESCE(?5, valid_from) \
+         WHERE id = ?1 AND superseded_by IS NULL",
+        params![id, statement, patch.predicate, patch.value, patch.valid_from],
     )?;
+    if updated != 1 {
+        return Err(StorageError::Integrity(format!(
+            "fact {id} is no longer current and cannot be updated"
+        )));
+    }
     Ok(())
 }
 
@@ -240,8 +269,8 @@ fn convert(raw: RawFact) -> Result<Fact, StorageError> {
 mod tests {
     use super::*;
     use crate::{
-        contracts::types::{EngagementPatch, PersonPatch},
-        storage::{Db, affiliations, people},
+        contracts::types::{EngagementPatch, OrganizationPatch, PersonPatch},
+        storage::{Db, affiliations, organizations, people},
     };
     use serde_json::json;
 
@@ -296,6 +325,108 @@ mod tests {
             assert_eq!(current[0].id, new);
             assert_eq!(search(c, "マネージャー", &ScopeSet::single("cn"), 10)?.len(), 0, "置換済みは検索に出ない");
             assert!(matches!(supersede(c, old, &fp(json!({"entity_type": "person", "entity_id": pid, "statement": "x"})), Kind::Fact, "cn"), Err(StorageError::Integrity(_))));
+            assert!(matches!(
+                update(c, old, &fp(json!({"statement": "履歴の改変"})), "cn"),
+                Err(StorageError::Integrity(_))
+            ));
+            assert_eq!(
+                get(c, old, &ScopeSet::single("cn"))?.unwrap().statement,
+                "役職はマネージャー"
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn supersede_rejects_a_different_entity_target() {
+        let db = Db::open_in_memory().unwrap();
+        let pid = fixture(&db);
+        db.with_conn::<_, StorageError>(|c| {
+            let other_pid = people::insert(
+                c,
+                &serde_json::from_value::<PersonPatch>(json!({"name": "別の人物"})).unwrap(),
+            )?;
+            let old = insert(
+                c,
+                &fp(json!({
+                    "entity_type": "person",
+                    "entity_id": pid,
+                    "statement": "旧情報"
+                })),
+                Kind::Fact,
+                "cn",
+            )?;
+            assert!(matches!(
+                supersede(
+                    c,
+                    old,
+                    &fp(json!({
+                        "entity_type": "person",
+                        "entity_id": other_pid,
+                        "statement": "別人の新情報"
+                    })),
+                    Kind::Fact,
+                    "cn"
+                ),
+                Err(StorageError::Integrity(_))
+            ));
+            let org_id = organizations::insert(
+                c,
+                &serde_json::from_value::<OrganizationPatch>(json!({"name": "別の組織"})).unwrap(),
+            )?;
+            assert!(matches!(
+                supersede(
+                    c,
+                    old,
+                    &fp(json!({
+                        "entity_type": "organization",
+                        "entity_id": org_id,
+                        "statement": "別種別の新情報"
+                    })),
+                    Kind::Fact,
+                    "cn"
+                ),
+                Err(StorageError::Integrity(_))
+            ));
+            assert_eq!(
+                get(c, old, &ScopeSet::single("cn"))?.unwrap().superseded_by,
+                None
+            );
+            assert!(for_entity(c, "person", other_pid, &ScopeSet::single("cn"), 10)?.is_empty());
+            assert!(for_entity(c, "organization", org_id, &ScopeSet::single("cn"), 10)?.is_empty());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn update_rejects_link_changes_and_blank_statement() {
+        let db = Db::open_in_memory().unwrap();
+        let pid = fixture(&db);
+        db.with_conn::<_, StorageError>(|c| {
+            let id = insert(
+                c,
+                &fp(json!({
+                    "entity_type": "person",
+                    "entity_id": pid,
+                    "statement": "変更前"
+                })),
+                Kind::Fact,
+                "cn",
+            )?;
+            assert!(matches!(
+                update(c, id, &fp(json!({"entity_id": pid})), "cn"),
+                Err(StorageError::Integrity(_))
+            ));
+            assert!(matches!(
+                update(c, id, &fp(json!({"statement": "  "})), "cn"),
+                Err(StorageError::Integrity(_))
+            ));
+            assert_eq!(
+                get(c, id, &ScopeSet::single("cn"))?.unwrap().statement,
+                "変更前"
+            );
             Ok(())
         })
         .unwrap();

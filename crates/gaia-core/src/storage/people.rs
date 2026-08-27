@@ -50,7 +50,8 @@ pub fn update(conn: &Connection, id: i64, patch: &PersonPatch) -> Result<(), Sto
     Ok(())
 }
 
-/// 生の alias と、その正規化形（kind='normalized'）を登録する。既存行は上書きしない。
+/// 生の alias と、その正規化形（kind='normalized'）を登録する。
+/// 生の alias が自動生成済みの正規化形と衝突した場合だけ、明示された kind へ昇格する。
 pub fn add_alias(
     conn: &Connection,
     person_id: i64,
@@ -62,7 +63,9 @@ pub fn add_alias(
         return Err(StorageError::Integrity("alias is required".into()));
     }
     conn.execute(
-        "INSERT INTO person_aliases(person_id, alias, kind) VALUES (?1, ?2, ?3) ON CONFLICT(person_id, alias) DO NOTHING",
+        "INSERT INTO person_aliases(person_id, alias, kind) VALUES (?1, ?2, ?3) \
+         ON CONFLICT(person_id, alias) DO UPDATE SET kind = excluded.kind \
+         WHERE person_aliases.kind = 'normalized'",
         params![person_id, alias, kind],
     )?;
     let normalized = normalize_name(alias);
@@ -264,6 +267,44 @@ mod tests {
                 ),
                 Err(StorageError::NotFound(_))
             ));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn explicit_alias_promotes_an_existing_normalized_alias() {
+        let db = Db::open_in_memory().unwrap();
+        db.with_conn::<_, StorageError>(|c| {
+            let id = insert(
+                c,
+                &serde_json::from_value::<PersonPatch>(json!({
+                    "name": "Ada Lovelace",
+                    "aliases": [{"alias": "adalovelace", "kind": "handle"}]
+                }))
+                .unwrap(),
+            )?;
+
+            let promoted_kind: Option<String> = c.query_row(
+                "SELECT kind FROM person_aliases WHERE person_id = ?1 AND alias = 'adalovelace'",
+                params![id],
+                |row| row.get(0),
+            )?;
+            assert_eq!(promoted_kind.as_deref(), Some("handle"));
+            assert!(
+                aliases(c, id)?
+                    .iter()
+                    .any(|a| a.alias == "adalovelace" && a.kind.as_deref() == Some("handle"))
+            );
+
+            // 後続 alias の正規化副 alias は、昇格済みの kind を戻さない。
+            add_alias(c, id, "ADA LOVELACE", Some("uppercase"))?;
+            let preserved_kind: Option<String> = c.query_row(
+                "SELECT kind FROM person_aliases WHERE person_id = ?1 AND alias = 'adalovelace'",
+                params![id],
+                |row| row.get(0),
+            )?;
+            assert_eq!(preserved_kind.as_deref(), Some("handle"));
             Ok(())
         })
         .unwrap();

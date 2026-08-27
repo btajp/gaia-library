@@ -264,7 +264,7 @@
     "FactPatch": {
       "type": "object",
       "additionalProperties": false,
-      "description": "insert / supersede 時は entity_type / entity_id / statement 必須。predicate はレジストリ（role / status / interest / decision）にあるときのみ許可し value 必須",
+      "description": "insert / supersede 時は entity_type / entity_id / statement 必須。update では entity_type / entity_id は変更不可。predicate はレジストリ（role / status / interest / decision）にあるときのみ許可し value 必須",
       "properties": {
         "entity_type": { "$ref": "#/$defs/EntityType" },
         "entity_id": { "type": "integer" },
@@ -277,7 +277,7 @@
     "RefPatch": {
       "type": "object",
       "additionalProperties": false,
-      "description": "insert 時は target_type / target_id / system / uri / note 必須（URI だけの参照は禁止）",
+      "description": "insert 時は target_type / target_id / system / uri / note 必須（URI だけの参照は禁止）。update では target_type / target_id は変更不可",
       "properties": {
         "target_type": { "$ref": "#/$defs/RefTargetType" },
         "target_id": { "type": "integer" },

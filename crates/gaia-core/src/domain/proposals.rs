@@ -35,6 +35,15 @@ fn blank(v: &Option<String>) -> bool {
     v.as_deref().map(|s| s.trim().is_empty()).unwrap_or(true)
 }
 
+fn reject_blank_if_present(v: &Option<String>, field: &str) -> Result<(), ToolError> {
+    if v.as_deref().is_some_and(|s| s.trim().is_empty()) {
+        return Err(ToolError::invalid_params(format!(
+            "{field} must not be empty"
+        )));
+    }
+    Ok(())
+}
+
 /// propose 時の事前検証。DB は見ない(存在検証は承認時の apply で行う)。
 pub fn validate(
     target_type: ProposalTargetType,
@@ -61,16 +70,28 @@ pub fn validate(
             "supersede is only valid for facts",
         ));
     }
+    if action == ProposalAction::Update && patch.is_empty() {
+        return Err(ToolError::invalid_params(
+            "update patch must contain at least one field",
+        ));
+    }
+    if let Some((field, _)) = patch.iter().find(|(_, value)| value.is_null()) {
+        return Err(ToolError::invalid_params(format!(
+            "patch field `{field}` must not be null; omit unchanged fields"
+        )));
+    }
     let insert_like = action != ProposalAction::Update;
     match target_type {
         ProposalTargetType::Person => {
             let p: PersonPatch = parse(patch, target_type)?;
+            reject_blank_if_present(&p.name, "person.name")?;
             if insert_like && blank(&p.name) {
                 return Err(ToolError::invalid_params("person insert requires name"));
             }
         }
         ProposalTargetType::Organization => {
             let p: OrganizationPatch = parse(patch, target_type)?;
+            reject_blank_if_present(&p.name, "organization.name")?;
             if insert_like && blank(&p.name) {
                 return Err(ToolError::invalid_params(
                     "organization insert requires name",
@@ -79,12 +100,16 @@ pub fn validate(
         }
         ProposalTargetType::Engagement => {
             let p: EngagementPatch = parse(patch, target_type)?;
+            reject_blank_if_present(&p.name, "engagement.name")?;
             if insert_like && blank(&p.name) {
                 return Err(ToolError::invalid_params("engagement insert requires name"));
             }
         }
         ProposalTargetType::Interaction => {
             let p: InteractionPatch = parse(patch, target_type)?;
+            reject_blank_if_present(&p.kind, "interaction.kind")?;
+            reject_blank_if_present(&p.occurred_at, "interaction.occurred_at")?;
+            reject_blank_if_present(&p.summary, "interaction.summary")?;
             if insert_like && (blank(&p.kind) || blank(&p.occurred_at) || blank(&p.summary)) {
                 return Err(ToolError::invalid_params(
                     "interaction insert requires kind, occurred_at and summary",
@@ -93,6 +118,8 @@ pub fn validate(
         }
         ProposalTargetType::Entity => {
             let p: EntityPatch = parse(patch, target_type)?;
+            reject_blank_if_present(&p.type_, "entity.type")?;
+            reject_blank_if_present(&p.name, "entity.name")?;
             if insert_like && (blank(&p.type_) || blank(&p.name)) {
                 return Err(ToolError::invalid_params(
                     "entity insert requires type and name",
@@ -101,6 +128,14 @@ pub fn validate(
         }
         ProposalTargetType::Fact => {
             let p: FactPatch = parse(patch, target_type)?;
+            reject_blank_if_present(&p.statement, "fact.statement")?;
+            if action == ProposalAction::Update
+                && (patch.contains_key("entity_type") || patch.contains_key("entity_id"))
+            {
+                return Err(ToolError::invalid_params(
+                    "fact update cannot change entity_type or entity_id",
+                ));
+            }
             if insert_like
                 && (p.entity_type.is_none() || p.entity_id.is_none() || blank(&p.statement))
             {
@@ -108,10 +143,24 @@ pub fn validate(
                     "fact insert/supersede requires entity_type, entity_id and statement",
                 ));
             }
-            predicates::check(p.predicate.as_deref(), p.value.as_deref())?;
+            if action == ProposalAction::Update {
+                predicates::check_update_patch(p.predicate.as_deref(), p.value.as_deref())?;
+            } else {
+                predicates::check(p.predicate.as_deref(), p.value.as_deref())?;
+            }
         }
         ProposalTargetType::Ref => {
             let p: RefPatch = parse(patch, target_type)?;
+            reject_blank_if_present(&p.system, "ref.system")?;
+            reject_blank_if_present(&p.uri, "ref.uri")?;
+            reject_blank_if_present(&p.note, "ref.note")?;
+            if action == ProposalAction::Update
+                && (patch.contains_key("target_type") || patch.contains_key("target_id"))
+            {
+                return Err(ToolError::invalid_params(
+                    "ref update cannot change target_type or target_id",
+                ));
+            }
             if insert_like
                 && (p.target_type.is_none()
                     || p.target_id.is_none()
@@ -126,6 +175,7 @@ pub fn validate(
         }
         ProposalTargetType::Glossary => {
             let p: GlossaryPatch = parse(patch, target_type)?;
+            reject_blank_if_present(&p.term, "glossary.term")?;
             if insert_like && blank(&p.term) {
                 return Err(ToolError::invalid_params("glossary insert requires term"));
             }
@@ -191,7 +241,15 @@ pub fn apply(conn: &Connection, proposal: &Proposal) -> Result<ApplyOutcome, Too
         }
         (ProposalTargetType::Fact, ProposalAction::Update) => {
             let id = target_id.expect("validated");
-            facts::update(conn, id, &parse(&proposal.patch, t)?, scope)?;
+            let patch: FactPatch = parse(&proposal.patch, t)?;
+            let current = facts::get(conn, id, &crate::scope::ScopeSet::single(scope))?
+                .ok_or_else(|| {
+                    ToolError::not_found(format!("fact {id} (in scope `{scope}`) not found"))
+                })?;
+            let predicate = patch.predicate.as_deref().or(current.predicate.as_deref());
+            let value = patch.value.as_deref().or(current.value.as_deref());
+            predicates::check(predicate, value)?;
+            facts::update(conn, id, &patch, scope)?;
             id
         }
         (ProposalTargetType::Fact, ProposalAction::Supersede) => facts::supersede(
@@ -347,6 +405,132 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_blank_required_fields_on_update() {
+        for (target, patch) in [
+            ("person", json!({"name": "  "})),
+            ("organization", json!({"name": "  "})),
+            ("engagement", json!({"name": "  "})),
+            ("interaction", json!({"kind": "  "})),
+            ("interaction", json!({"occurred_at": "  "})),
+            ("interaction", json!({"summary": "  "})),
+            ("entity", json!({"type": "  "})),
+            ("entity", json!({"name": "  "})),
+            ("fact", json!({"statement": "  "})),
+            ("ref", json!({"system": "  "})),
+            ("ref", json!({"uri": "  "})),
+            ("ref", json!({"note": "  "})),
+            ("glossary", json!({"term": "  "})),
+        ] {
+            let patch = patch.as_object().unwrap().clone();
+            let err = validate(
+                target.parse().unwrap(),
+                ProposalAction::Update,
+                Some(1),
+                &patch,
+            )
+            .unwrap_err();
+            assert_eq!(err.code, ErrorCode::InvalidParams, "{target}: {patch:?}");
+        }
+    }
+
+    #[test]
+    fn validate_rejects_null_fields_and_empty_updates() {
+        for (target, patch) in [
+            ("person", json!({"role": null})),
+            ("organization", json!({"kind": null})),
+            ("engagement", json!({"status": null})),
+            ("interaction", json!({"engagement_id": null})),
+            ("entity", json!({"name": null})),
+            ("fact", json!({"valid_from": null})),
+            ("ref", json!({"title": null})),
+            ("glossary", json!({"reading": null})),
+        ] {
+            let patch = patch.as_object().unwrap().clone();
+            let err = validate(
+                target.parse().unwrap(),
+                ProposalAction::Update,
+                Some(1),
+                &patch,
+            )
+            .unwrap_err();
+            assert_eq!(err.code, ErrorCode::InvalidParams, "{target}: {patch:?}");
+        }
+
+        let empty = Map::new();
+        for target in [
+            "person",
+            "organization",
+            "engagement",
+            "interaction",
+            "entity",
+            "fact",
+            "ref",
+            "glossary",
+        ] {
+            let err = validate(
+                target.parse().unwrap(),
+                ProposalAction::Update,
+                Some(1),
+                &empty,
+            )
+            .unwrap_err();
+            assert_eq!(err.code, ErrorCode::InvalidParams, "{target}");
+        }
+    }
+
+    #[test]
+    fn validate_rejects_orphan_fact_values_and_immutable_link_fields() {
+        for (action, target_id) in [
+            (ProposalAction::Insert, None),
+            (ProposalAction::Supersede, Some(1)),
+        ] {
+            let patch = json!({
+                "entity_type": "person",
+                "entity_id": 1,
+                "statement": "役職情報",
+                "value": "director"
+            })
+            .as_object()
+            .unwrap()
+            .clone();
+            let err = validate(ProposalTargetType::Fact, action, target_id, &patch).unwrap_err();
+            assert_eq!(err.code, ErrorCode::InvalidParams);
+        }
+
+        for (target, patch) in [
+            ("fact", json!({"entity_type": "person"})),
+            ("fact", json!({"entity_type": null})),
+            ("fact", json!({"entity_id": 1})),
+            ("fact", json!({"entity_id": null})),
+            ("ref", json!({"target_type": "person"})),
+            ("ref", json!({"target_type": null})),
+            ("ref", json!({"target_id": 1})),
+            ("ref", json!({"target_id": null})),
+        ] {
+            let patch = patch.as_object().unwrap().clone();
+            let err = validate(
+                target.parse().unwrap(),
+                ProposalAction::Update,
+                Some(1),
+                &patch,
+            )
+            .unwrap_err();
+            assert_eq!(err.code, ErrorCode::InvalidParams, "{target}: {patch:?}");
+        }
+
+        let partial = json!({"value": "director"}).as_object().unwrap().clone();
+        assert!(
+            validate(
+                ProposalTargetType::Fact,
+                ProposalAction::Update,
+                Some(1),
+                &partial,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn person_insert_apply_then_inline_provenance_ref() {
         let db = setup();
         let proposal = make_proposal(
@@ -406,7 +590,7 @@ mod tests {
     }
 
     #[test]
-    fn fact_supersede_and_update_not_found() {
+    fn fact_supersede_rejects_history_update_and_update_not_found() {
         let db = setup();
         let pid = db
             .with_conn::<_, StorageError>(|c| {
@@ -445,6 +629,27 @@ mod tests {
             Ok(())
         })
         .unwrap();
+        let historical_update = make_proposal(
+            &db,
+            "fact",
+            "update",
+            Some(fid),
+            json!({"statement": "履歴の改変"}),
+            None,
+        );
+        let err = db
+            .with_conn::<_, ToolError>(|c| apply(c, &historical_update).map(|_| ()))
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::InvalidParams);
+        db.with_conn::<_, StorageError>(|c| {
+            let old = facts::get(c, fid, &ScopeSet::single("cn"))?.unwrap();
+            let current = facts::get(c, new_id, &ScopeSet::single("cn"))?.unwrap();
+            assert_eq!(old.statement, "旧情報");
+            assert_eq!(old.superseded_by, Some(new_id));
+            assert_eq!(current.statement, "新情報");
+            Ok(())
+        })
+        .unwrap();
         let upd = make_proposal(
             &db,
             "person",
@@ -457,6 +662,73 @@ mod tests {
             .with_conn::<_, ToolError>(|c| apply(c, &upd).map(|_| ()))
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::NotFound);
+    }
+
+    #[test]
+    fn fact_update_validates_the_merged_predicate_and_value() {
+        let db = setup();
+        let pid = db
+            .with_conn::<_, StorageError>(|c| {
+                people::insert(c, &serde_json::from_value(json!({"name": "田中"})).unwrap())
+            })
+            .unwrap();
+        let structured = make_proposal(
+            &db,
+            "fact",
+            "insert",
+            None,
+            json!({
+                "entity_type": "person",
+                "entity_id": pid,
+                "statement": "役職はマネージャー",
+                "predicate": "role",
+                "value": "manager"
+            }),
+            None,
+        );
+        let structured_id = db
+            .with_conn::<_, ToolError>(|c| Ok(apply(c, &structured)?.id))
+            .unwrap();
+        let valid_update = make_proposal(
+            &db,
+            "fact",
+            "update",
+            Some(structured_id),
+            json!({"value": "director"}),
+            None,
+        );
+        db.with_conn::<_, ToolError>(|c| {
+            apply(c, &valid_update)?;
+            let got = facts::get(c, structured_id, &ScopeSet::single("cn"))?.expect("updated fact");
+            assert_eq!(got.predicate.as_deref(), Some("role"));
+            assert_eq!(got.value.as_deref(), Some("director"));
+            Ok(())
+        })
+        .unwrap();
+
+        let free_text = make_proposal(
+            &db,
+            "fact",
+            "insert",
+            None,
+            json!({"entity_type": "person", "entity_id": pid, "statement": "自由文"}),
+            None,
+        );
+        let free_text_id = db
+            .with_conn::<_, ToolError>(|c| Ok(apply(c, &free_text)?.id))
+            .unwrap();
+        let invalid_update = make_proposal(
+            &db,
+            "fact",
+            "update",
+            Some(free_text_id),
+            json!({"value": "orphan"}),
+            None,
+        );
+        let err = db
+            .with_conn::<_, ToolError>(|c| apply(c, &invalid_update).map(|_| ()))
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::InvalidParams);
     }
 
     #[test]

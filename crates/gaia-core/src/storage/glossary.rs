@@ -37,6 +37,13 @@ pub fn update(
             "glossary term {id} (in scope `{scope}`)"
         )));
     }
+    if let Some(eid) = patch.engagement_id
+        && engagements::get(conn, eid, &ScopeSet::single(scope))?.is_none()
+    {
+        return Err(StorageError::NotFound(format!(
+            "engagement {eid} (in scope `{scope}`)"
+        )));
+    }
     conn.execute(
         "UPDATE glossary SET term = COALESCE(?2, term), reading = COALESCE(?3, reading), \
          definition = COALESCE(?4, definition), engagement_id = COALESCE(?5, engagement_id), updated_at = datetime('now') WHERE id = ?1",
@@ -150,6 +157,44 @@ mod tests {
             assert_eq!(
                 search_like(c, "スキム", &ScopeSet::single("cn"), 10)?.len(),
                 1
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn update_rejects_engagement_from_another_scope() {
+        let db = Db::open_in_memory().unwrap();
+        db.with_conn::<_, StorageError>(|c| {
+            affiliations::insert(c, "cn", None)?;
+            affiliations::insert(c, "other", None)?;
+            let other_eid = engagements::insert(
+                c,
+                &serde_json::from_value::<EngagementPatch>(json!({"name": "別 scope の案件"}))
+                    .unwrap(),
+                "other",
+            )?;
+            let glossary_id = insert(
+                c,
+                &serde_json::from_value::<GlossaryPatch>(json!({"term": "SCIM"})).unwrap(),
+                "cn",
+            )?;
+
+            let result = update(
+                c,
+                glossary_id,
+                &serde_json::from_value::<GlossaryPatch>(json!({"engagement_id": other_eid}))
+                    .unwrap(),
+                "cn",
+            );
+
+            assert!(matches!(result, Err(StorageError::NotFound(_))));
+            assert_eq!(
+                get(c, glossary_id, &ScopeSet::single("cn"))?
+                    .unwrap()
+                    .engagement_id,
+                None
             );
             Ok(())
         })
