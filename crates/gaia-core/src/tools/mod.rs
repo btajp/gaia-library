@@ -1,10 +1,12 @@
 //! ToolService: CLI と MCP の唯一の入口。仕様書 §8.1。
 //! 手順: ツール解決 → role 認可 → 契約スキーマで入力検証 → 型付きハンドラ → （debug/test）出力検証。
 mod get_engagement;
+mod get_glossary;
 mod get_organization;
 mod get_person;
 mod job_status;
 mod propose;
+mod resolve_speakers;
 mod server_info;
 
 use serde::{Serialize, de::DeserializeOwned};
@@ -28,6 +30,8 @@ pub const HANDLED_TOOLS: &[&str] = &[
     "get_person",
     "get_organization",
     "get_engagement",
+    "get_glossary",
+    "resolve_speakers",
 ];
 
 pub struct ToolService {
@@ -101,6 +105,8 @@ fn dispatch(ctx: &CallContext<'_>, tool: &str, args: Value) -> Result<Value, Too
         "get_person" => run(ctx, args, get_person::handle),
         "get_organization" => run(ctx, args, get_organization::handle),
         "get_engagement" => run(ctx, args, get_engagement::handle),
+        "get_glossary" => run(ctx, args, get_glossary::handle),
+        "resolve_speakers" => run(ctx, args, resolve_speakers::handle),
         other => Err(ToolError::not_implemented(format!(
             "tool `{other}` has no handler yet"
         ))),
@@ -421,5 +427,62 @@ mod tests {
         assert_eq!(out["organization"]["id"].as_i64().unwrap(), ids.org);
         assert_eq!(out["people"].as_array().unwrap().len(), 1);
         assert_eq!(out["engagements"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn glossary_hints_include_terms_readings_and_member_aliases() {
+        let s = service();
+        let ids = test_support::seed_basic(&s);
+        let out = s.call(&agent(), "get_glossary", json!({"engagement_id": ids.engagement})).unwrap();
+        let hints: Vec<&str> = out["vocabulary_hints"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        for expected in ["SCIM", "スキム", "岡村 慎太郎", "okash1n", "Okamura Shintaro"] {
+            assert!(hints.contains(&expected), "missing {expected}: {hints:?}");
+        }
+        // engagement 省略で scope 内全用語
+        let all = s.call(&agent(), "get_glossary", json!({})).unwrap();
+        assert_eq!(all["terms"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn resolve_speakers_matches_zoom_style_display_names() {
+        let s = service();
+        let ids = test_support::seed_basic(&s);
+        let out = s
+            .call(&agent(), "resolve_speakers", json!({
+                "display_names": ["岡村 慎太郎 (RELATIONS)", "OKAMURA SHINTARO", "見知らぬ 人"],
+                "engagement_id": ids.engagement
+            }))
+            .unwrap();
+        let results = out["results"].as_array().unwrap();
+        assert_eq!(results[0]["status"], "matched");
+        assert_eq!(results[0]["person"]["id"].as_i64().unwrap(), ids.person);
+        assert_eq!(results[1]["status"], "matched", "ローマ字大文字も正規化で一致する");
+        assert_eq!(results[2]["status"], "unmatched");
+    }
+
+    #[test]
+    fn resolve_speakers_reports_ambiguity_and_narrows_by_engagement() {
+        let s = service();
+        let ids = test_support::seed_basic(&s);
+        // 同じ「田中」を 2 人つくる（片方だけ案件の関係者）
+        let t1 = test_support::write(&s, "person", json!({"name": "田中 太郎", "aliases": [{"alias": "田中"}]}));
+        let _t2 = test_support::write(&s, "person", json!({"name": "田中 次郎", "aliases": [{"alias": "田中"}]}));
+        s.call(&human(), "propose_update", json!({
+            "target_type": "engagement", "action": "update", "target_id": ids.engagement,
+            "patch": {"people": [{"person_id": t1, "role": "member"}]}, "kind": "fact", "request_id": "req-add-tanaka-1"
+        }))
+        .and_then(|out| s.call(&human(), "approve_proposal", json!({"proposal_id": out["proposal_id"]})))
+        .unwrap();
+        // engagement 無し → ambiguous
+        let out = s.call(&agent(), "resolve_speakers", json!({"display_names": ["田中"]})).unwrap();
+        assert_eq!(out["results"][0]["status"], "ambiguous");
+        assert_eq!(out["results"][0]["candidates"].as_array().unwrap().len(), 2);
+        // engagement 指定 → 関係者の田中太郎に絞られて matched(0.9)
+        let out = s
+            .call(&agent(), "resolve_speakers", json!({"display_names": ["田中"], "engagement_id": ids.engagement}))
+            .unwrap();
+        assert_eq!(out["results"][0]["status"], "matched");
+        assert_eq!(out["results"][0]["person"]["id"].as_i64().unwrap(), t1);
+        assert!((out["results"][0]["confidence"].as_f64().unwrap() - 0.9).abs() < 1e-9);
     }
 }
