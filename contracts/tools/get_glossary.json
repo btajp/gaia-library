@@ -1,0 +1,22 @@
+{
+  "name": "get_glossary",
+  "title": "用語集と語彙ヒント",
+  "description": "案件（engagement_id 省略時は scope 内全体）の用語集と、文字起こしの語彙ヒント（用語・読み・関係者の名前と alias を平坦化した配列。Whisper の initial_prompt にそのまま使える）を返す。",
+  "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "engagement_id": { "type": "integer" },
+      "scope": { "$ref": "../defs/common.json#/$defs/ScopeInput" }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": ["terms", "vocabulary_hints"],
+    "properties": {
+      "terms": { "type": "array", "items": { "$ref": "../defs/common.json#/$defs/GlossaryTerm" } },
+      "vocabulary_hints": { "type": "array", "items": { "type": "string" } }
+    }
+  }
+}

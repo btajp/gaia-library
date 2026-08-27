@@ -1,0 +1,25 @@
+{
+  "name": "resolve_source",
+  "title": "参照のサーバー側解決",
+  "description": "ref_id または uri で指定した参照を、ローカル MCP サーバー（narumi 等）に問い合わせて実体を返す読み取り専用ツール。到達不能時は参照とスナップショットを resolved=false で返す。v1 では未登録。",
+  "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true },
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "ref_id": { "type": "integer" },
+      "uri": { "type": "string" },
+      "scope": { "$ref": "../defs/common.json#/$defs/ScopeInput" }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": ["reference", "resolved"],
+    "properties": {
+      "reference": { "$ref": "../defs/common.json#/$defs/Reference" },
+      "resolved": { "type": "boolean" },
+      "content": { "type": "string" },
+      "reason": { "type": "string" }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "get_job_status",
+  "title": "ジョブ状態",
+  "description": "長時間処理のジョブ状態を返す共通ツール。gaia_library v1 にはジョブが無いため常に not_found を返す（narumi と共通規約を揃えるために存在する）。",
+  "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+  "inputSchema": {
+    "type": "object",
+    "required": ["job_id"],
+    "additionalProperties": false,
+    "properties": { "job_id": { "type": "string" } }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": ["job_id", "status"],
+    "properties": {
+      "job_id": { "type": "string" },
+      "status": { "type": "string" },
+      "result": {}
+    }
+  }
+}

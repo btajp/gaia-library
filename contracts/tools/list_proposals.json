@@ -1,0 +1,22 @@
+{
+  "name": "list_proposals",
+  "title": "提案の一覧",
+  "description": "提案キューを status（省略時 pending）と scope で絞って新しい順に返す。",
+  "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "status": { "$ref": "../defs/common.json#/$defs/ProposalStatus" },
+      "scope": { "$ref": "../defs/common.json#/$defs/ScopeInput" },
+      "limit": { "type": "integer", "default": 50 }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": ["proposals"],
+    "properties": {
+      "proposals": { "type": "array", "items": { "$ref": "../defs/common.json#/$defs/Proposal" } }
+    }
+  }
+}

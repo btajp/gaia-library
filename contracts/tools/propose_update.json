@@ -1,0 +1,30 @@
+{
+  "name": "propose_update",
+  "title": "更新の提案",
+  "description": "人物・組織・案件・interaction・汎用エンティティ・fact・ref・用語の追加/更新/置換（supersede は fact のみ）を提案キューに積む。直接の書き込みはできず、human が approve_proposal で承認して初めて反映される。patch は target_type ごとの Patch 型（PersonPatch / OrganizationPatch / EngagementPatch / InteractionPatch / EntityPatch / FactPatch / RefPatch / GlossaryPatch）。request_id はクライアント発番（8 文字以上、UTF-8 で 256 bytes 以下）で、同一クライアント・同一内容の再送だけ duplicate=true で既存の提案を返す。異なる内容での再利用は conflict。",
+  "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+  "inputSchema": {
+    "type": "object",
+    "required": ["target_type", "action", "patch", "kind", "request_id"],
+    "additionalProperties": false,
+    "properties": {
+      "target_type": { "$ref": "../defs/common.json#/$defs/ProposalTargetType" },
+      "action": { "$ref": "../defs/common.json#/$defs/ProposalAction" },
+      "target_id": { "type": "integer", "description": "update / supersede で必須" },
+      "patch": { "type": "object", "description": "target_type ごとの Patch 型" },
+      "kind": { "$ref": "../defs/common.json#/$defs/Kind" },
+      "scope": { "type": "string", "description": "省略時はクライアントの既定 scope" },
+      "provenance": { "$ref": "../defs/common.json#/$defs/Provenance" },
+      "request_id": { "type": "string", "description": "8 文字以上、UTF-8 で 256 bytes 以下。ハンドラで検証" }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": ["proposal_id", "status", "duplicate"],
+    "properties": {
+      "proposal_id": { "type": "integer" },
+      "status": { "$ref": "../defs/common.json#/$defs/ProposalStatus" },
+      "duplicate": { "type": "boolean" }
+    }
+  }
+}

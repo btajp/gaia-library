@@ -1,0 +1,26 @@
+{
+  "name": "get_organization",
+  "title": "組織の詳細",
+  "description": "organization_id または name で組織を特定し、所属する人物・案件（scope 内）・facts・refs を返す。",
+  "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "organization_id": { "type": "integer" },
+      "name": { "type": "string" },
+      "scope": { "$ref": "../defs/common.json#/$defs/ScopeInput" }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": ["organization", "people", "engagements", "facts", "refs"],
+    "properties": {
+      "organization": { "$ref": "../defs/common.json#/$defs/OrganizationSummary" },
+      "people": { "type": "array", "items": { "$ref": "../defs/common.json#/$defs/PersonSummary" } },
+      "engagements": { "type": "array", "items": { "$ref": "../defs/common.json#/$defs/EngagementSummary" } },
+      "facts": { "type": "array", "items": { "$ref": "../defs/common.json#/$defs/Fact" } },
+      "refs": { "type": "array", "items": { "$ref": "../defs/common.json#/$defs/Reference" } }
+    }
+  }
+}

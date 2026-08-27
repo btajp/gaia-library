@@ -1,0 +1,23 @@
+{
+  "name": "resolve_speakers",
+  "title": "表示名の人物突合",
+  "description": "会議ツールの表示名（例: '岡村 慎太郎 (CloudNative)'）を正規化して people の alias と完全一致で突合し、matched / ambiguous / unmatched と候補・確度を返す。engagement_id を渡すとその案件の関係者を優先する（このとき scope が必要）。",
+  "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+  "inputSchema": {
+    "type": "object",
+    "required": ["display_names"],
+    "additionalProperties": false,
+    "properties": {
+      "display_names": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+      "scope": { "$ref": "../defs/common.json#/$defs/ScopeInput" },
+      "engagement_id": { "type": "integer" }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": ["results"],
+    "properties": {
+      "results": { "type": "array", "items": { "$ref": "../defs/common.json#/$defs/SpeakerResult" } }
+    }
+  }
+}

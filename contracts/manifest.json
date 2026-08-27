@@ -1,0 +1,20 @@
+{
+  "contract_version": "1.0.0",
+  "server_name": "gaia_library",
+  "defs": "defs/common.json",
+  "tools": [
+    { "name": "search_context",   "file": "tools/search_context.json",   "roles": ["human", "agent"], "enabled": true },
+    { "name": "get_person",       "file": "tools/get_person.json",       "roles": ["human", "agent"], "enabled": true },
+    { "name": "get_organization", "file": "tools/get_organization.json", "roles": ["human", "agent"], "enabled": true },
+    { "name": "get_engagement",   "file": "tools/get_engagement.json",   "roles": ["human", "agent"], "enabled": true },
+    { "name": "get_glossary",     "file": "tools/get_glossary.json",     "roles": ["human", "agent"], "enabled": true },
+    { "name": "resolve_speakers", "file": "tools/resolve_speakers.json", "roles": ["human", "agent"], "enabled": true },
+    { "name": "resolve_source",   "file": "tools/resolve_source.json",   "roles": ["human", "agent"], "enabled": false },
+    { "name": "propose_update",   "file": "tools/propose_update.json",   "roles": ["human", "agent"], "enabled": true },
+    { "name": "list_proposals",   "file": "tools/list_proposals.json",   "roles": ["human", "agent"], "enabled": true },
+    { "name": "approve_proposal", "file": "tools/approve_proposal.json", "roles": ["human"],          "enabled": true },
+    { "name": "reject_proposal",  "file": "tools/reject_proposal.json",  "roles": ["human"],          "enabled": true },
+    { "name": "get_server_info",  "file": "tools/get_server_info.json",  "roles": ["human", "agent"], "enabled": true },
+    { "name": "get_job_status",   "file": "tools/get_job_status.json",   "roles": ["human", "agent"], "enabled": true }
+  ]
+}
