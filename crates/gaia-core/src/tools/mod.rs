@@ -7,6 +7,7 @@ mod get_person;
 mod job_status;
 mod propose;
 mod resolve_speakers;
+mod search_context;
 mod server_info;
 
 use serde::{Serialize, de::DeserializeOwned};
@@ -19,7 +20,7 @@ use crate::{
     storage::Db,
 };
 
-/// dispatch 済みツール。Task 16 完了時に「enabled な契約 = この一覧」となる（テストで固定）。
+/// dispatch 済みツール。契約の enabled ツールと 1:1（テストで固定）。
 pub const HANDLED_TOOLS: &[&str] = &[
     "get_server_info",
     "get_job_status",
@@ -32,6 +33,7 @@ pub const HANDLED_TOOLS: &[&str] = &[
     "get_engagement",
     "get_glossary",
     "resolve_speakers",
+    "search_context",
 ];
 
 pub struct ToolService {
@@ -107,6 +109,7 @@ fn dispatch(ctx: &CallContext<'_>, tool: &str, args: Value) -> Result<Value, Too
         "get_engagement" => run(ctx, args, get_engagement::handle),
         "get_glossary" => run(ctx, args, get_glossary::handle),
         "resolve_speakers" => run(ctx, args, resolve_speakers::handle),
+        "search_context" => run(ctx, args, search_context::handle),
         other => Err(ToolError::not_implemented(format!(
             "tool `{other}` has no handler yet"
         ))),
@@ -526,5 +529,90 @@ mod tests {
         assert_eq!(out["results"][0]["status"], "matched");
         assert_eq!(out["results"][0]["person"]["id"].as_i64().unwrap(), t1);
         assert!((out["results"][0]["confidence"].as_f64().unwrap() - 0.9).abs() < 1e-9);
+    }
+
+    #[test]
+    fn handled_tools_equal_enabled_contract_tools() {
+        let s = service();
+        let mut enabled: Vec<&str> = s
+            .catalog()
+            .tools()
+            .iter()
+            .filter(|t| t.enabled)
+            .map(|t| t.name.as_str())
+            .collect();
+        let mut handled: Vec<&str> = HANDLED_TOOLS.to_vec();
+        enabled.sort();
+        handled.sort();
+        assert_eq!(
+            enabled, handled,
+            "契約の enabled ツールと dispatch が 1:1 であること"
+        );
+    }
+
+    #[test]
+    fn search_context_returns_answer_blueprint() {
+        let s = service();
+        let ids = test_support::seed_basic(&s);
+        let out = s
+            .call(&agent(), "search_context", json!({"query": "SCIM"}))
+            .unwrap();
+        // fact ヒットが案件に折りたたまれ、facts と minutes への参照が同梱される
+        let e = &out["entities"][0];
+        assert_eq!(e["type"], "engagement");
+        assert_eq!(e["id"].as_i64().unwrap(), ids.engagement);
+        assert!(
+            e["matched_on"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|m| m.as_str().unwrap().starts_with("fact:"))
+        );
+        assert!(
+            e["refs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["system"] == "minutes")
+        );
+        assert_eq!(out["glossary"][0]["term"], "SCIM");
+        assert_eq!(out["interactions"].as_array().unwrap().len(), 1);
+        assert_eq!(out["cross_scope"], false);
+    }
+
+    #[test]
+    fn search_context_finds_people_by_alias_and_flags_short_queries() {
+        let s = service();
+        let ids = test_support::seed_basic(&s);
+        let out = s
+            .call(&agent(), "search_context", json!({"query": "okash1n"}))
+            .unwrap();
+        assert_eq!(out["entities"][0]["type"], "person");
+        assert_eq!(out["entities"][0]["id"].as_i64().unwrap(), ids.person);
+        assert!(
+            out["entities"][0]["matched_on"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|m| m == "alias")
+        );
+        // 2 文字クエリはヒント付き
+        let short = s
+            .call(
+                &agent(),
+                "search_context",
+                json!({"query": "決定", "types": ["engagement"]}),
+            )
+            .unwrap();
+        assert!(!short["hints"].as_array().unwrap().is_empty());
+        // scope 外のデータは出ない
+        let other = s
+            .call(
+                &agent(),
+                "search_context",
+                json!({"query": "SCIM", "scope": "other"}),
+            )
+            .unwrap();
+        assert_eq!(other["entities"].as_array().unwrap().len(), 0);
     }
 }
