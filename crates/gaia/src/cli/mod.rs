@@ -1,7 +1,9 @@
 //! CLI。全コマンドが ToolService::call を経由する（例外は init / affiliation / client の管理系のみ）。
 mod admin_cmd;
 mod app;
+mod query;
 mod serve;
+mod write;
 
 use std::path::PathBuf;
 
@@ -67,6 +69,44 @@ pub enum Command {
         #[arg(long)]
         args: String,
     },
+    /// 横断検索（search_context）
+    Search(query::SearchArgs),
+    /// 人物の詳細（get_person）
+    Person {
+        #[command(subcommand)]
+        cmd: query::GetCmd,
+    },
+    /// 組織の詳細（get_organization）
+    Org {
+        #[command(subcommand)]
+        cmd: query::GetCmd,
+    },
+    /// 案件の詳細（get_engagement）
+    Engagement {
+        #[command(subcommand)]
+        cmd: query::GetCmd,
+    },
+    /// 用語集と語彙ヒント（get_glossary）
+    Glossary(query::GlossaryArgs),
+    /// 表示名の人物突合（resolve_speakers）
+    Speakers(query::SpeakersArgs),
+    /// 更新の提案（propose_update）
+    Propose(write::ProposeArgs),
+    /// 提案の一覧（list_proposals）
+    Proposals(write::ProposalsArgs),
+    /// 提案の承認（human）
+    Approve { proposal_id: i64 },
+    /// 提案の却下（human）
+    Reject {
+        proposal_id: i64,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// 提案＋即時承認（human）
+    Add {
+        #[command(subcommand)]
+        cmd: write::AddCmd,
+    },
 }
 
 pub fn run(cli: Cli) -> anyhow::Result<()> {
@@ -101,5 +141,65 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
             app::print_json(&out, compact);
             Ok(())
         }
+        Command::Search(a) => with_app(&cli, |app, client| query::search(app, client, a, compact)),
+        Command::Person { cmd } => with_app(&cli, |app, client| {
+            query::get_entity(app, client, "get_person", "person_id", cmd, compact)
+        }),
+        Command::Org { cmd } => with_app(&cli, |app, client| {
+            query::get_entity(
+                app,
+                client,
+                "get_organization",
+                "organization_id",
+                cmd,
+                compact,
+            )
+        }),
+        Command::Engagement { cmd } => with_app(&cli, |app, client| {
+            query::get_entity(app, client, "get_engagement", "engagement_id", cmd, compact)
+        }),
+        Command::Glossary(a) => {
+            with_app(&cli, |app, client| query::glossary(app, client, a, compact))
+        }
+        Command::Speakers(a) => {
+            with_app(&cli, |app, client| query::speakers(app, client, a, compact))
+        }
+        Command::Propose(a) => {
+            with_app(&cli, |app, client| write::propose(app, client, a, compact))
+        }
+        Command::Proposals(a) => with_app(&cli, |app, client| {
+            write::proposals(app, client, a, compact)
+        }),
+        Command::Approve { proposal_id } => with_app(&cli, |app, client| {
+            let out = app.call(
+                client,
+                "approve_proposal",
+                json!({"proposal_id": proposal_id}),
+            )?;
+            app::print_json(&out, compact);
+            Ok(())
+        }),
+        Command::Reject {
+            proposal_id,
+            reason,
+        } => with_app(&cli, |app, client| {
+            let mut args = json!({"proposal_id": proposal_id});
+            if let Some(r) = reason {
+                args["reason"] = json!(r);
+            }
+            let out = app.call(client, "reject_proposal", args)?;
+            app::print_json(&out, compact);
+            Ok(())
+        }),
+        Command::Add { cmd } => with_app(&cli, |app, client| write::add(app, client, cmd, compact)),
     }
+}
+
+fn with_app(
+    cli: &Cli,
+    f: impl FnOnce(&app::App, &gaia_core::identity::ClientIdentity) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let app = app::App::open(cli.config.as_ref())?;
+    let client = app.identity(cli.client.as_deref())?;
+    f(&app, &client)
 }
