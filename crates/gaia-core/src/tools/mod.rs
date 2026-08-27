@@ -1,5 +1,8 @@
 //! ToolService: CLI と MCP の唯一の入口。仕様書 §8.1。
 //! 手順: ツール解決 → role 認可 → 契約スキーマで入力検証 → 型付きハンドラ → （debug/test）出力検証。
+mod get_engagement;
+mod get_organization;
+mod get_person;
 mod job_status;
 mod propose;
 mod server_info;
@@ -22,6 +25,9 @@ pub const HANDLED_TOOLS: &[&str] = &[
     "list_proposals",
     "approve_proposal",
     "reject_proposal",
+    "get_person",
+    "get_organization",
+    "get_engagement",
 ];
 
 pub struct ToolService {
@@ -92,6 +98,9 @@ fn dispatch(ctx: &CallContext<'_>, tool: &str, args: Value) -> Result<Value, Too
         "list_proposals" => run(ctx, args, propose::list_proposals),
         "approve_proposal" => run(ctx, args, propose::approve_proposal),
         "reject_proposal" => run(ctx, args, propose::reject_proposal),
+        "get_person" => run(ctx, args, get_person::handle),
+        "get_organization" => run(ctx, args, get_organization::handle),
+        "get_engagement" => run(ctx, args, get_engagement::handle),
         other => Err(ToolError::not_implemented(format!(
             "tool `{other}` has no handler yet"
         ))),
@@ -247,6 +256,7 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
+    use super::test_support;
     use super::test_support::{agent, human, service};
     use super::*;
     use crate::error::ErrorCode;
@@ -333,5 +343,84 @@ mod tests {
             .unwrap();
         assert_eq!(entries[0].action, "admin_write");
         assert_eq!(entries[0].detail["name"], "assoc");
+    }
+
+    #[test]
+    fn get_person_by_name_returns_connected_context() {
+        let s = service();
+        let ids = test_support::seed_basic(&s);
+        let out = s
+            .call(&agent(), "get_person", json!({"name": "okash1n"}))
+            .unwrap();
+        assert_eq!(out["person"]["id"].as_i64().unwrap(), ids.person);
+        assert_eq!(out["organization"]["name"], "RELATIONS");
+        assert_eq!(out["engagements"][0]["name"], "Okta導入支援");
+        assert_eq!(out["interactions"].as_array().unwrap().len(), 1);
+        // 引数無しは invalid_params、未知 id は not_found
+        assert_eq!(
+            s.call(&agent(), "get_person", json!({})).unwrap_err().code,
+            ErrorCode::InvalidParams
+        );
+        assert_eq!(
+            s.call(&agent(), "get_person", json!({"person_id": 9999}))
+                .unwrap_err()
+                .code,
+            ErrorCode::NotFound
+        );
+    }
+
+    #[test]
+    fn get_engagement_hides_out_of_scope_and_returns_members() {
+        let s = service();
+        let ids = test_support::seed_basic(&s);
+        let out = s
+            .call(
+                &agent(),
+                "get_engagement",
+                json!({"engagement_id": ids.engagement}),
+            )
+            .unwrap();
+        assert_eq!(
+            out["people"][0]["person"]["id"].as_i64().unwrap(),
+            ids.person
+        );
+        assert_eq!(out["people"][0]["role"], "key_person");
+        assert_eq!(out["glossary"][0]["term"], "SCIM");
+        assert_eq!(
+            out["facts"][0]["statement"]
+                .as_str()
+                .unwrap()
+                .contains("SCIM"),
+            true
+        );
+        // fact の根拠参照（minutes）が refs に載る
+        assert!(
+            out["refs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["system"] == "minutes")
+        );
+        // 別 scope からは not_found
+        let err = s
+            .call(
+                &agent(),
+                "get_engagement",
+                json!({"engagement_id": ids.engagement, "scope": "other"}),
+            )
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::NotFound);
+    }
+
+    #[test]
+    fn get_organization_lists_people_and_engagements() {
+        let s = service();
+        let ids = test_support::seed_basic(&s);
+        let out = s
+            .call(&agent(), "get_organization", json!({"name": "RELATIONS"}))
+            .unwrap();
+        assert_eq!(out["organization"]["id"].as_i64().unwrap(), ids.org);
+        assert_eq!(out["people"].as_array().unwrap().len(), 1);
+        assert_eq!(out["engagements"].as_array().unwrap().len(), 1);
     }
 }
