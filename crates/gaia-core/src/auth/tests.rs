@@ -145,6 +145,21 @@ fn key_format_and_hash_are_stable() {
 }
 
 #[test]
+fn entropy_failure_aborts_generation_without_exposing_input_or_source_error() {
+    let failure = std::panic::catch_unwind(|| {
+        generate_key_with_entropy("do-not-log-client-name", |raw| {
+            raw.fill(0xab);
+            Err("do-not-log-entropy-error")
+        })
+    })
+    .expect_err("entropy failure must not return a key");
+    assert_eq!(
+        failure.downcast_ref::<&str>().copied(),
+        Some("cannot obtain OS randomness for API key generation")
+    );
+}
+
+#[test]
 fn generated_keys_are_header_safe_for_unicode_spaces_and_control_characters() {
     for (name, expected_prefix) in [
         ("日本語 クライアント", "client"),

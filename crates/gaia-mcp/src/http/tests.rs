@@ -6,6 +6,7 @@ use serde_json::json;
 use super::{HttpServeError, serve_http};
 use support::*;
 
+mod authentication;
 mod capacity;
 mod inflight;
 mod lifecycle;

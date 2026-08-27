@@ -95,7 +95,11 @@ async fn bearer_middleware(
         .next()
         .filter(|_| authorization.next().is_none())
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
+        .and_then(|value| value.split_once(' '))
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("Bearer"))
+        // scheme の区切りは 1*SP。キー本体の大小文字や内容は変更しない。
+        .map(|(_, token)| token.trim_start_matches(' '))
+        .filter(|token| !token.is_empty() && !token.bytes().any(|byte| byte.is_ascii_whitespace()))
         .and_then(|token| state.auth.verify(token));
     let Some(identity) = identity else {
         tracing::warn!("http: rejected request without a valid bearer key");

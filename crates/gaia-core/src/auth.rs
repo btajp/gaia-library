@@ -1,7 +1,7 @@
 //! API キー認証の材料。仕様書 B §4.1。平文キーは保存せず、config の [keys] に SHA-256 hex だけを置く。
 use std::path::{Path, PathBuf};
 
-use rand::RngCore;
+use rand::{TryRngCore, rngs::OsRng};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
@@ -33,8 +33,15 @@ pub fn hash_key(key: &str) -> String {
 /// 平文キー `gaia_<safe-prefix>_<32hex>` と SHA-256 hex を返す。prefix は識別には使わない。
 /// 平文は発行時に 1 度だけ表示する。
 pub fn generate_key(name: &str) -> (String, String) {
+    generate_key_with_entropy(name, |raw| OsRng.try_fill_bytes(raw))
+}
+
+fn generate_key_with_entropy<E>(
+    name: &str,
+    fill: impl FnOnce(&mut [u8; 16]) -> Result<(), E>,
+) -> (String, String) {
     let mut raw = [0u8; 16];
-    rand::rng().fill_bytes(&mut raw);
+    fill(&mut raw).unwrap_or_else(|_| panic!("cannot obtain OS randomness for API key generation"));
     let plaintext = format!("gaia_{}_{}", key_prefix(name), hex(&raw));
     let hash = hash_key(&plaintext);
     (plaintext, hash)

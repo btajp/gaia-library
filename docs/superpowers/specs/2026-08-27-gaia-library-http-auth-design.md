@@ -53,7 +53,7 @@
 
 ### 4.3 接続スニペット（gaia client mcp-config）
 
-- stdio: `{"mcpServers": {"gaia_library": {"command": "gaia", "args": ["serve", "--stdio", "--client", "<name>"]}}}`
+- stdio: `{"mcpServers": {"gaia_library": {"command": "gaia", "args": ["--config", "<absolute-config-path>", "--client", "<name>", "serve", "--stdio"], "env": {"GAIA_DB": "<absolute-db-path>"}}}}` — 生成時の設定と実効 DB の絶対パスを保持し、接続元の作業ディレクトリや環境変数に依存しない。DB を移動した場合は再生成する
 - http: `{"mcpServers": {"gaia_library": {"type": "http", "url": "http://127.0.0.1:<port>/mcp", "headers": {"Authorization": "Bearer <key>"}}}}` — 有効な平文キーを `--key-stdin` または互換用の `--key` で受け取る（両者は排他）。出力前に指定クライアントの有効なキーか検証する。config からは復元できず、設定の生成だけで勝手に再発行はしない
 
 ### 4.4 テスト
