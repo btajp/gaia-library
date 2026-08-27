@@ -486,10 +486,10 @@ MCP への写像:
 
 **list_proposals** — 入力 `status?`（既定 `pending`）、`scope?`、`limit?`。出力 `{ proposals: [{ id, action, target_type, target_id, patch, kind, scope, provenance, proposed_by, request_id, status, result_id, created_at, decided_at, decided_by, decision_note }] }`。
 
-**approve_proposal**（human のみ）— 入力 `proposal_id`。1 トランザクションで: 提案が `pending` であること → `patch` を型付きで再検証 → polymorphic 整合（参照先の存在）→ predicate 規則（§8.6）→ 適用（insert / update / supersede）→ `result_id`、`status='approved'`、`decided_by`、`decided_at` を記録 → `audit_log(approve)`。検証に失敗した場合は提案を `pending` のまま残し、エラーを返す。
+**approve_proposal**（human のみ）— 入力 `proposal_id`、`scope?`。scope は明示指定 → クライアント既定値の順で解決し、どちらも無ければ `scope_denied`。scope 外の提案は `not_found` とする。1 トランザクションで: 提案が `pending` であること → `patch` を型付きで再検証 → polymorphic 整合（参照先の存在）→ predicate 規則（§8.6）→ 適用（insert / update / supersede）→ `result_id`、`status='approved'`、`decided_by`、`decided_at` を記録 → `audit_log(approve)`。検証に失敗した場合は提案を `pending` のまま残し、エラーを返す。複数 scope の明示指定は `audit_log(cross_scope_read)` に残し、この読み取り監査は適用失敗時にも保持する。
 出力 `{ proposal_id, status, result: { target_type, id } }`。
 
-**reject_proposal**（human のみ）— 入力 `proposal_id`、`reason?`。出力 `{ proposal_id, status }`。
+**reject_proposal**（human のみ）— 入力 `proposal_id`、`scope?`、`reason?`。scope の解決・遮断・横断監査は承認と同じ。出力 `{ proposal_id, status }`。
 
 ### 8.5 共通ツール
 
@@ -525,16 +525,18 @@ MCP への写像:
 | `gaia serve --stdio --client <name>` | MCP サーバーを stdio で起動 |
 | `gaia affiliation add <name> [--identity <text>]` / `list` | 機密境界の管理（human、`audit_log(admin_write)`） |
 | `gaia client add <name> --role <human\|agent> [--default-scope <name>]` / `list` | 設定ファイルのクライアント管理 |
-| `gaia search <query> [--scope ...] [--types ...]` | `search_context` |
-| `gaia person get <id\|name>` / `org get` / `engagement get` / `glossary [--engagement <id>]` | 参照系 |
+| `gaia search <query> [--scope ...] [--type ...]` | `search_context` |
+| `gaia person get [--id <id>\|--name <name>]` / `org get` / `engagement get` / `glossary [--engagement-id <id>]` | 参照系 |
 | `gaia speakers <name>...` | `resolve_speakers` |
 | `gaia propose <target_type> <insert\|update\|supersede> --patch <json> [--target-id] [--kind] [--scope] [--provenance <json>]` | `propose_update`（`request_id` は自動発番） |
-| `gaia proposals [--status ...]` / `gaia approve <id>` / `gaia reject <id> [--reason ...]` | 提案の一覧・承認・却下 |
+| `gaia proposals [--status ...] [--scope ...]` / `gaia approve <id> [--scope ...]` / `gaia reject <id> [--scope ...] [--reason ...]` | 提案の一覧・承認・却下 |
 | `gaia add person --name ... [--alias ...]...` / `add org` / `add engagement` / `add fact` / `add ref` / `add glossary` / `add interaction` | human 限定の「提案＋即時承認」を 1 コマンド化 |
-| `gaia call <tool> --json <args>` | 任意ツールの汎用呼び出し |
+| `gaia call <tool> --args <json>` | 任意ツールの汎用呼び出し |
 | `gaia info` | `get_server_info` |
 
 出力は既定で整形済み JSON（人が読む用）、`--json` で 1 行の JSON（機械処理用）。ログは `tracing` で stderr、`RUST_LOG` で制御。
+
+`init` は同じ設定への初期化を排他制御し、既存設定を上書きしない。設定保存に失敗した後の再試行では、同じ affiliation と identity の登録を無変更で再利用する。`add --scope` は提案と即時承認の両方へ同じ scope を渡す。
 
 ## 11. テスト
 

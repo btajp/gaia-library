@@ -144,11 +144,15 @@ fn convert(raw: RawProposal) -> Result<Proposal, StorageError> {
     })
 }
 
-pub fn get(conn: &Connection, id: i64) -> Result<Option<Proposal>, StorageError> {
+pub fn get(
+    conn: &Connection,
+    id: i64,
+    scopes: &ScopeSet,
+) -> Result<Option<Proposal>, StorageError> {
     let raw = conn
         .query_row(
-            &format!("SELECT {COLS} FROM proposals WHERE id = ?1"),
-            params![id],
+            &format!("SELECT {COLS} FROM proposals WHERE id = ?1 AND scope IN (SELECT value FROM json_each(?2))"),
+            params![id, scopes.as_json()],
             raw_row,
         )
         .optional()?;
@@ -158,11 +162,12 @@ pub fn get(conn: &Connection, id: i64) -> Result<Option<Proposal>, StorageError>
 pub fn find_by_request_id(
     conn: &Connection,
     request_id: &str,
+    scopes: &ScopeSet,
 ) -> Result<Option<Proposal>, StorageError> {
     let raw = conn
         .query_row(
-            &format!("SELECT {COLS} FROM proposals WHERE request_id = ?1"),
-            params![request_id],
+            &format!("SELECT {COLS} FROM proposals WHERE request_id = ?1 AND scope IN (SELECT value FROM json_each(?2))"),
+            params![request_id, scopes.as_json()],
             raw_row,
         )
         .optional()?;
@@ -314,7 +319,7 @@ mod tests {
         db.with_conn::<_, StorageError>(|conn| {
             let base = candidate("req-exact-1");
             let id = insert(conn, &base)?;
-            let existing = get(conn, id)?.unwrap();
+            let existing = get(conn, id, &ScopeSet::single("cn"))?.unwrap();
             assert!(differing_submission_fields(&existing, &base, &None).is_empty());
 
             let mut changed = base.clone();

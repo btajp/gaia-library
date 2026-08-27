@@ -4,6 +4,7 @@ use super::{
 };
 use crate::contracts::Catalog;
 use crate::error::ErrorCode;
+use crate::scope::ScopeSet;
 use crate::storage::{Db, StorageError, affiliations, audit, proposals};
 use crate::tools::ToolService;
 use crate::tools::test_support::{agent, human, seed_basic, service, write};
@@ -375,7 +376,7 @@ fn failed_engagement_approval_rolls_back_parent_relation_and_audit() {
             )?;
             assert_eq!(relation_count, 0);
 
-            let retained = proposals::get(conn, proposal_id)?.unwrap();
+            let retained = proposals::get(conn, proposal_id, &ScopeSet::single("cn"))?.unwrap();
             assert_eq!(retained.status, ProposalStatus::Pending);
             assert!(retained.result_id.is_none());
             assert!(retained.decided_at.is_none());
@@ -455,7 +456,7 @@ fn separate_connections_serialize_competing_approve_and_reject() {
     let verify_db = Db::open(&db_path).unwrap();
     verify_db
         .with_conn::<_, StorageError>(|conn| {
-            let decided = proposals::get(conn, proposal_id)?.unwrap();
+            let decided = proposals::get(conn, proposal_id, &ScopeSet::single("cn"))?.unwrap();
             assert!(matches!(
                 decided.status,
                 ProposalStatus::Approved | ProposalStatus::Rejected

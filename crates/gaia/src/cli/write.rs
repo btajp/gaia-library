@@ -316,19 +316,19 @@ pub fn add(app: &App, client: &ClientIdentity, cmd: &AddCmd, compact: bool) -> a
         "target_type": target_type, "action": "insert", "patch": patch, "kind": kind,
         "request_id": new_request_id(),
     });
-    if let Some(s) = scope {
+    if let Some(s) = &scope {
         payload["scope"] = json!(s);
     }
     let proposed = app.call(client, "propose_update", payload)?;
     let proposal_id = proposed["proposal_id"]
         .as_i64()
         .ok_or_else(|| ToolError::internal("propose_update の応答に proposal_id がありません"))?;
+    let mut approval = json!({"proposal_id": proposal_id});
+    if let Some(s) = &scope {
+        approval["scope"] = json!(s);
+    }
     let approved = app
-        .call(
-            client,
-            "approve_proposal",
-            json!({"proposal_id": proposal_id}),
-        )
+        .call(client, "approve_proposal", approval)
         .map_err(|mut error| {
             error.details = Some(match error.details.take() {
                 Some(Value::Object(mut details)) => {

@@ -1,13 +1,16 @@
 {
   "name": "approve_proposal",
   "title": "提案の承認（human のみ）",
-  "description": "pending の提案を検証して適用し、承認済みにする。human ロールのクライアントだけが呼べる。検証に失敗した場合は提案を pending のまま残してエラーを返す。",
+  "description": "指定 scope 内の pending の提案を検証して適用し、承認済みにする。scope 省略時はクライアントの既定 scope を使い、複数 scope の明示指定は監査ログに残す。human ロールのクライアントだけが呼べる。検証に失敗した場合は提案を pending のまま残してエラーを返す。",
   "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": false },
   "inputSchema": {
     "type": "object",
     "required": ["proposal_id"],
     "additionalProperties": false,
-    "properties": { "proposal_id": { "type": "integer" } }
+    "properties": {
+      "proposal_id": { "type": "integer" },
+      "scope": { "$ref": "../defs/common.json#/$defs/ScopeInput" }
+    }
   },
   "outputSchema": {
     "type": "object",

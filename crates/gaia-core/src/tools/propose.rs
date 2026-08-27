@@ -5,12 +5,12 @@ use crate::{
     contracts::types::{
         ApplyResult, ApproveProposalInput, ApproveProposalOutput, ListProposalsInput,
         ListProposalsOutput, ProposalStatus, ProposalTargetType, ProposeUpdateInput,
-        ProposeUpdateOutput, RejectProposalInput, RejectProposalOutput,
+        ProposeUpdateOutput, RejectProposalInput, RejectProposalOutput, ScopeInput,
     },
     domain,
     error::ToolError,
     scope::{ScopeSet, scope_input_to_vec},
-    storage::{affiliations, audit, proposals, refs},
+    storage::{StorageError, audit, proposals, refs},
 };
 
 use super::CallContext;
@@ -60,15 +60,8 @@ pub fn propose_update(
         ));
     }
     let attempt = ctx.db.with_tx(|tx| {
-        let scope = match input.scope.clone().or_else(|| ctx.client.default_scope.clone()) {
-            Some(s) => s,
-            None => {
-                return Err(ToolError::scope_denied(format!(
-                    "scope is required: pass `scope` or set default_scope for client `{}`",
-                    ctx.client.name
-                )));
-            }
-        };
+        let scopes = ScopeSet::resolve(tx, ctx.client, input.scope.clone().map(|scope| vec![scope]))?;
+        let scope = &scopes.names()[0];
         let (provenance, provenance_id) = match &input.provenance {
             Some(p) if p.ref_id.is_some() => (
                 None,
@@ -91,7 +84,7 @@ pub fn propose_update(
         };
 
         // 件数・容量ガードより先に完全一致を判定し、上限到達後の正当な再送も成功させる。
-        if let Some(existing) = proposals::find_by_request_id(tx, &input.request_id)? {
+        if let Some(existing) = proposals::find_by_request_id(tx, &input.request_id, &scopes)? {
             if existing.proposed_by != ctx.client.name {
                 audit::record(
                     tx,
@@ -145,11 +138,6 @@ pub fn propose_update(
             ));
         }
 
-        if !affiliations::exists(tx, &scope)? {
-            return Err(ToolError::not_found(format!(
-                "scope `{scope}` (affiliation) not found"
-            )));
-        }
         domain::proposals::validate(
             input.target_type,
             input.action,
@@ -186,7 +174,7 @@ pub fn propose_update(
                     ));
                 }
                 let rid = candidate.provenance_id.expect("normalized above");
-                if refs::get(tx, rid, &ScopeSet::single(&scope))?.is_none() {
+                if refs::get(tx, rid, &scopes)?.is_none() {
                     return Err(ToolError::not_found(format!("provenance ref {rid} (in scope `{scope}`)")));
                 }
             }
@@ -205,7 +193,7 @@ pub fn propose_update(
         }
 
         let pending_count =
-            proposals::count_pending_by_client_scope(tx, &ctx.client.name, &scope)?;
+            proposals::count_pending_by_client_scope(tx, &ctx.client.name, scope)?;
         if pending_count >= MAX_PENDING_PROPOSALS_PER_CLIENT_SCOPE {
             return Err(ToolError::busy(format!(
                 "pending proposal limit reached for client `{}` in scope `{scope}`",
@@ -219,7 +207,28 @@ pub fn propose_update(
             })));
         }
 
-        let id = proposals::insert(tx, &candidate)?;
+        let id = match proposals::insert(tx, &candidate) {
+            Ok(id) => id,
+            Err(StorageError::Sqlite(rusqlite::Error::SqliteFailure(failure, _)))
+                if failure.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE =>
+            {
+                // 別 scope の本文を読まず一意制約だけで競合とし、既存提案の ID も記録しない。
+                audit::record(
+                    tx,
+                    &ctx.client.name,
+                    "propose_conflict",
+                    &json!({
+                        "request_id": input.request_id,
+                        "reason": "request_id_already_used",
+                    }),
+                )?;
+                return Ok(ProposeAttempt::Rejected(ToolError::conflict(format!(
+                    "request_id `{}` is already in use",
+                    input.request_id
+                ))));
+            }
+            Err(error) => return Err(error.into()),
+        };
         audit::record(
             tx,
             &ctx.client.name,
@@ -257,8 +266,9 @@ pub fn approve_proposal(
     ctx: &CallContext<'_>,
     input: ApproveProposalInput,
 ) -> Result<ApproveProposalOutput, ToolError> {
+    let scopes = decision_scopes(ctx, input.scope.as_ref(), "approve_proposal")?;
     ctx.db.with_tx(|tx| {
-        let proposal = proposals::get(tx, input.proposal_id)?
+        let proposal = proposals::get(tx, input.proposal_id, &scopes)?
             .ok_or_else(|| ToolError::not_found(format!("proposal {}", input.proposal_id)))?;
         if proposal.status != ProposalStatus::Pending {
             return Err(ToolError::conflict(format!("proposal {} is already {}", proposal.id, proposal.status)));
@@ -295,8 +305,9 @@ pub fn reject_proposal(
     ctx: &CallContext<'_>,
     input: RejectProposalInput,
 ) -> Result<RejectProposalOutput, ToolError> {
+    let scopes = decision_scopes(ctx, input.scope.as_ref(), "reject_proposal")?;
     ctx.db.with_tx(|tx| {
-        let proposal = proposals::get(tx, input.proposal_id)?
+        let proposal = proposals::get(tx, input.proposal_id, &scopes)?
             .ok_or_else(|| ToolError::not_found(format!("proposal {}", input.proposal_id)))?;
         if proposal.status != ProposalStatus::Pending {
             return Err(ToolError::conflict(format!(
@@ -327,6 +338,22 @@ pub fn reject_proposal(
         })
     })
 }
+
+fn decision_scopes(
+    ctx: &CallContext<'_>,
+    requested: Option<&ScopeInput>,
+    tool: &str,
+) -> Result<ScopeSet, ToolError> {
+    ctx.db.with_conn(|conn| {
+        let scopes = ScopeSet::resolve(conn, ctx.client, scope_input_to_vec(requested))?;
+        // 横断読取の監査は、適用・決定が失敗しても rollback されないよう先に確定する。
+        scopes.audit_cross_read(conn, &ctx.client.name, tool)?;
+        Ok(scopes)
+    })
+}
+
+#[cfg(test)]
+mod scope_tests;
 
 #[cfg(test)]
 mod tests;

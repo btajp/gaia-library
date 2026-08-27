@@ -95,12 +95,18 @@ pub enum Command {
     /// 提案の一覧（list_proposals）
     Proposals(write::ProposalsArgs),
     /// 提案の承認（human）
-    Approve { proposal_id: i64 },
+    Approve {
+        proposal_id: i64,
+        #[arg(long)]
+        scope: Vec<String>,
+    },
     /// 提案の却下（human）
     Reject {
         proposal_id: i64,
         #[arg(long)]
         reason: Option<String>,
+        #[arg(long)]
+        scope: Vec<String>,
     },
     /// 提案＋即時承認（human）
     Add {
@@ -178,22 +184,26 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Proposals(a) => with_app(&cli, |app, client| {
             write::proposals(app, client, a, compact)
         }),
-        Command::Approve { proposal_id } => with_app(&cli, |app, client| {
-            let out = app.call(
-                client,
-                "approve_proposal",
-                json!({"proposal_id": proposal_id}),
-            )?;
+        Command::Approve { proposal_id, scope } => with_app(&cli, |app, client| {
+            let mut args = json!({"proposal_id": proposal_id});
+            if !scope.is_empty() {
+                args["scope"] = json!(scope);
+            }
+            let out = app.call(client, "approve_proposal", args)?;
             app::print_json(&out, compact);
             Ok(())
         }),
         Command::Reject {
             proposal_id,
             reason,
+            scope,
         } => with_app(&cli, |app, client| {
             let mut args = json!({"proposal_id": proposal_id});
             if let Some(r) = reason {
                 args["reason"] = json!(r);
+            }
+            if !scope.is_empty() {
+                args["scope"] = json!(scope);
             }
             let out = app.call(client, "reject_proposal", args)?;
             app::print_json(&out, compact);

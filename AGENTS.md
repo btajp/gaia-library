@@ -32,7 +32,7 @@
 
 ## 公開ツール（v1 契約、contracts/manifest.json が正本）
 - 参照系（readOnlyHint）: search_context / get_person / get_organization / get_engagement / get_glossary / resolve_speakers（実装済み・登録済み）/ resolve_source（契約のみ。未登録）
-- 提案系: propose_update / list_proposals / approve_proposal（human）/ reject_proposal（human）
+- 提案系: propose_update / list_proposals / approve_proposal（human）/ reject_proposal（human）。承認・却下も scope 指定またはクライアント既定値が必須
 - 共通: get_server_info / get_job_status（v1 は常に not_found）
 - 書き込みはクライアント発番の request_id（8 文字以上・256 bytes 以下）と送信内容の完全一致で冪等化（不一致の再利用は conflict）。提案 JSON は 1 MiB 以下、同一クライアント・scope の未決提案は 1,000 件未満。エラーは構造化コード（not_found / scope_denied / unauthorized / invalid_params / contract_mismatch / conflict / busy / not_implemented / internal）
 

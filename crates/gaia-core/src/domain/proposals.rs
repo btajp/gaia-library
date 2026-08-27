@@ -357,7 +357,7 @@ mod tests {
                 request_id: format!("req-{}", SEQ.fetch_add(1, Ordering::SeqCst)),
             };
             let id = proposals::insert(c, &new)?;
-            Ok(proposals::get(c, id)?.unwrap())
+            Ok(proposals::get(c, id, &ScopeSet::single("cn"))?.unwrap())
         })
         .unwrap()
     }
@@ -764,10 +764,14 @@ mod tests {
         );
         db.with_conn::<_, StorageError>(|c| {
             assert_eq!(
-                proposals::find_by_request_id(c, &p.request_id)?.unwrap().id,
+                proposals::find_by_request_id(c, &p.request_id, &ScopeSet::single("cn"))?
+                    .unwrap()
+                    .id,
                 p.id
             );
-            assert!(proposals::find_by_request_id(c, "missing")?.is_none());
+            assert!(
+                proposals::find_by_request_id(c, "missing", &ScopeSet::single("cn"))?.is_none()
+            );
             let pending =
                 proposals::list(c, "pending".parse().unwrap(), &ScopeSet::single("cn"), 10)?;
             assert!(pending.iter().any(|x| x.id == p.id));

@@ -1,7 +1,7 @@
 {
   "name": "reject_proposal",
   "title": "提案の却下（human のみ）",
-  "description": "pending の提案を却下する。human ロールのクライアントだけが呼べる。",
+  "description": "指定 scope 内の pending の提案を却下する。scope 省略時はクライアントの既定 scope を使い、複数 scope の明示指定は監査ログに残す。human ロールのクライアントだけが呼べる。",
   "annotations": { "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false },
   "inputSchema": {
     "type": "object",
@@ -9,6 +9,7 @@
     "additionalProperties": false,
     "properties": {
       "proposal_id": { "type": "integer" },
+      "scope": { "$ref": "../defs/common.json#/$defs/ScopeInput" },
       "reason": { "type": "string" }
     }
   },
