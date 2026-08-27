@@ -1,0 +1,13 @@
+{
+  "identifier": "com.local.gaia-library.desktop.updater-e2e",
+  "bundle": {
+    "createUpdaterArtifacts": false,
+    "macOS": { "signingIdentity": "-" }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": ["http://127.0.0.1:8930/latest.json"],
+      "dangerousInsecureTransportProtocol": true
+    }
+  }
+}
