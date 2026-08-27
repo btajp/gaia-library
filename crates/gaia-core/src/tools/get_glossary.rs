@@ -10,14 +10,17 @@ use crate::{
 
 use super::CallContext;
 
-pub fn handle(ctx: &CallContext<'_>, input: GetGlossaryInput) -> Result<GetGlossaryOutput, ToolError> {
+pub fn handle(
+    ctx: &CallContext<'_>,
+    input: GetGlossaryInput,
+) -> Result<GetGlossaryOutput, ToolError> {
     ctx.db.with_conn(|c| {
         let scopes = ScopeSet::resolve(c, ctx.client, scope_input_to_vec(input.scope.as_ref()))?;
         scopes.audit_cross_read(c, &ctx.client.name, "get_glossary")?;
-        if let Some(eid) = input.engagement_id {
-            if engagements::get(c, eid, &scopes)?.is_none() {
-                return Err(ToolError::not_found(format!("engagement {eid}")));
-            }
+        if let Some(eid) = input.engagement_id
+            && engagements::get(c, eid, &scopes)?.is_none()
+        {
+            return Err(ToolError::not_found(format!("engagement {eid}")));
         }
         let terms = glossary::list(c, input.engagement_id, &scopes)?;
         let mut hints: Vec<String> = Vec::new();
@@ -37,6 +40,9 @@ pub fn handle(ctx: &CallContext<'_>, input: GetGlossaryInput) -> Result<GetGloss
         }
         let mut seen = HashSet::new();
         hints.retain(|h| seen.insert(h.clone()));
-        Ok(GetGlossaryOutput { terms, vocabulary_hints: hints })
+        Ok(GetGlossaryOutput {
+            terms,
+            vocabulary_hints: hints,
+        })
     })
 }

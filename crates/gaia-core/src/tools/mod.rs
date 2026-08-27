@@ -433,9 +433,26 @@ mod tests {
     fn glossary_hints_include_terms_readings_and_member_aliases() {
         let s = service();
         let ids = test_support::seed_basic(&s);
-        let out = s.call(&agent(), "get_glossary", json!({"engagement_id": ids.engagement})).unwrap();
-        let hints: Vec<&str> = out["vocabulary_hints"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
-        for expected in ["SCIM", "スキム", "岡村 慎太郎", "okash1n", "Okamura Shintaro"] {
+        let out = s
+            .call(
+                &agent(),
+                "get_glossary",
+                json!({"engagement_id": ids.engagement}),
+            )
+            .unwrap();
+        let hints: Vec<&str> = out["vocabulary_hints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        for expected in [
+            "SCIM",
+            "スキム",
+            "岡村 慎太郎",
+            "okash1n",
+            "Okamura Shintaro",
+        ] {
             assert!(hints.contains(&expected), "missing {expected}: {hints:?}");
         }
         // engagement 省略で scope 内全用語
@@ -448,15 +465,22 @@ mod tests {
         let s = service();
         let ids = test_support::seed_basic(&s);
         let out = s
-            .call(&agent(), "resolve_speakers", json!({
-                "display_names": ["岡村 慎太郎 (RELATIONS)", "OKAMURA SHINTARO", "見知らぬ 人"],
-                "engagement_id": ids.engagement
-            }))
+            .call(
+                &agent(),
+                "resolve_speakers",
+                json!({
+                    "display_names": ["岡村 慎太郎 (RELATIONS)", "OKAMURA SHINTARO", "見知らぬ 人"],
+                    "engagement_id": ids.engagement
+                }),
+            )
             .unwrap();
         let results = out["results"].as_array().unwrap();
         assert_eq!(results[0]["status"], "matched");
         assert_eq!(results[0]["person"]["id"].as_i64().unwrap(), ids.person);
-        assert_eq!(results[1]["status"], "matched", "ローマ字大文字も正規化で一致する");
+        assert_eq!(
+            results[1]["status"], "matched",
+            "ローマ字大文字も正規化で一致する"
+        );
         assert_eq!(results[2]["status"], "unmatched");
     }
 
@@ -465,8 +489,16 @@ mod tests {
         let s = service();
         let ids = test_support::seed_basic(&s);
         // 同じ「田中」を 2 人つくる（片方だけ案件の関係者）
-        let t1 = test_support::write(&s, "person", json!({"name": "田中 太郎", "aliases": [{"alias": "田中"}]}));
-        let _t2 = test_support::write(&s, "person", json!({"name": "田中 次郎", "aliases": [{"alias": "田中"}]}));
+        let t1 = test_support::write(
+            &s,
+            "person",
+            json!({"name": "田中 太郎", "aliases": [{"alias": "田中"}]}),
+        );
+        let _t2 = test_support::write(
+            &s,
+            "person",
+            json!({"name": "田中 次郎", "aliases": [{"alias": "田中"}]}),
+        );
         s.call(&human(), "propose_update", json!({
             "target_type": "engagement", "action": "update", "target_id": ids.engagement,
             "patch": {"people": [{"person_id": t1, "role": "member"}]}, "kind": "fact", "request_id": "req-add-tanaka-1"
@@ -474,12 +506,22 @@ mod tests {
         .and_then(|out| s.call(&human(), "approve_proposal", json!({"proposal_id": out["proposal_id"]})))
         .unwrap();
         // engagement 無し → ambiguous
-        let out = s.call(&agent(), "resolve_speakers", json!({"display_names": ["田中"]})).unwrap();
+        let out = s
+            .call(
+                &agent(),
+                "resolve_speakers",
+                json!({"display_names": ["田中"]}),
+            )
+            .unwrap();
         assert_eq!(out["results"][0]["status"], "ambiguous");
         assert_eq!(out["results"][0]["candidates"].as_array().unwrap().len(), 2);
         // engagement 指定 → 関係者の田中太郎に絞られて matched(0.9)
         let out = s
-            .call(&agent(), "resolve_speakers", json!({"display_names": ["田中"], "engagement_id": ids.engagement}))
+            .call(
+                &agent(),
+                "resolve_speakers",
+                json!({"display_names": ["田中"], "engagement_id": ids.engagement}),
+            )
             .unwrap();
         assert_eq!(out["results"][0]["status"], "matched");
         assert_eq!(out["results"][0]["person"]["id"].as_i64().unwrap(), t1);

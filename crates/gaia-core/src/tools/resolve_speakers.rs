@@ -2,7 +2,9 @@
 use rusqlite::Connection;
 
 use crate::{
-    contracts::types::{ResolveSpeakersInput, ResolveSpeakersOutput, SpeakerCandidate, SpeakerResult, SpeakerStatus},
+    contracts::types::{
+        ResolveSpeakersInput, ResolveSpeakersOutput, SpeakerCandidate, SpeakerResult, SpeakerStatus,
+    },
     domain::normalize::normalize_name,
     error::ToolError,
     scope::{ScopeSet, scope_input_to_vec},
@@ -11,12 +13,16 @@ use crate::{
 
 use super::CallContext;
 
-pub fn handle(ctx: &CallContext<'_>, input: ResolveSpeakersInput) -> Result<ResolveSpeakersOutput, ToolError> {
+pub fn handle(
+    ctx: &CallContext<'_>,
+    input: ResolveSpeakersInput,
+) -> Result<ResolveSpeakersOutput, ToolError> {
     ctx.db.with_conn(|c| {
         // 人物は名寄せ層（共有）なので、scope が要るのは engagement の関係者を引くときだけ。
         let preferred: Vec<i64> = match input.engagement_id {
             Some(eid) => {
-                let scopes = ScopeSet::resolve(c, ctx.client, scope_input_to_vec(input.scope.as_ref()))?;
+                let scopes =
+                    ScopeSet::resolve(c, ctx.client, scope_input_to_vec(input.scope.as_ref()))?;
                 scopes.audit_cross_read(c, &ctx.client.name, "resolve_speakers")?;
                 if engagements::get(c, eid, &scopes)?.is_none() {
                     return Err(ToolError::not_found(format!("engagement {eid}")));
@@ -36,13 +42,27 @@ pub fn handle(ctx: &CallContext<'_>, input: ResolveSpeakersInput) -> Result<Reso
 fn resolve_one(c: &Connection, raw: &str, preferred: &[i64]) -> Result<SpeakerResult, ToolError> {
     let normalized = normalize_name(raw);
     if normalized.is_empty() {
-        return Ok(result(raw, normalized, SpeakerStatus::Unmatched, 0.0, None, Vec::new()));
+        return Ok(result(
+            raw,
+            normalized,
+            SpeakerStatus::Unmatched,
+            0.0,
+            None,
+            Vec::new(),
+        ));
     }
     let matches = people::find_by_alias_normalized(c, &normalized)?;
     match matches.len() {
         1 => {
             let person = matches.into_iter().next().expect("len checked");
-            Ok(result(raw, normalized, SpeakerStatus::Matched, 1.0, Some(person), Vec::new()))
+            Ok(result(
+                raw,
+                normalized,
+                SpeakerStatus::Matched,
+                1.0,
+                Some(person),
+                Vec::new(),
+            ))
         }
         0 => {
             let candidates: Vec<SpeakerCandidate> = people::search_like(c, raw, 5)?
@@ -54,14 +74,32 @@ fn resolve_one(c: &Connection, raw: &str, preferred: &[i64]) -> Result<SpeakerRe
                     name: p.name,
                 })
                 .collect();
-            Ok(result(raw, normalized, SpeakerStatus::Unmatched, 0.0, None, candidates))
+            Ok(result(
+                raw,
+                normalized,
+                SpeakerStatus::Unmatched,
+                0.0,
+                None,
+                candidates,
+            ))
         }
         _ => {
             // 完全一致が複数。engagement の関係者で 1 人に絞れれば matched(0.9)。
-            let narrowed: Vec<_> = matches.iter().filter(|p| preferred.contains(&p.id)).cloned().collect();
+            let narrowed: Vec<_> = matches
+                .iter()
+                .filter(|p| preferred.contains(&p.id))
+                .cloned()
+                .collect();
             if narrowed.len() == 1 {
                 let person = narrowed.into_iter().next().expect("len checked");
-                return Ok(result(raw, normalized, SpeakerStatus::Matched, 0.9, Some(person), Vec::new()));
+                return Ok(result(
+                    raw,
+                    normalized,
+                    SpeakerStatus::Matched,
+                    0.9,
+                    Some(person),
+                    Vec::new(),
+                ));
             }
             let candidates: Vec<SpeakerCandidate> = matches
                 .iter()
@@ -72,7 +110,14 @@ fn resolve_one(c: &Connection, raw: &str, preferred: &[i64]) -> Result<SpeakerRe
                     reason: "exact alias match".to_string(),
                 })
                 .collect();
-            Ok(result(raw, normalized, SpeakerStatus::Ambiguous, 0.5, None, candidates))
+            Ok(result(
+                raw,
+                normalized,
+                SpeakerStatus::Ambiguous,
+                0.5,
+                None,
+                candidates,
+            ))
         }
     }
 }
@@ -85,5 +130,12 @@ fn result(
     person: Option<crate::contracts::types::PersonSummary>,
     candidates: Vec<SpeakerCandidate>,
 ) -> SpeakerResult {
-    SpeakerResult { input: raw.to_string(), normalized, status, confidence, person, candidates }
+    SpeakerResult {
+        input: raw.to_string(),
+        normalized,
+        status,
+        confidence,
+        person,
+        candidates,
+    }
 }
