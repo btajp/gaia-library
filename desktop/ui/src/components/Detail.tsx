@@ -6,9 +6,9 @@ import { snapshotForKey } from "../lib/latestRequest";
 import type { DetailResult, DetailTarget, OpenDetail } from "../types";
 import DetailContent from "./DetailContent";
 
-type Props = { target: DetailTarget; scope: string; onBack: () => void; openDetail: OpenDetail };
+type Props = { target: DetailTarget; scope: string; onBack: () => void; openDetail: OpenDetail; backLabel?: string };
 
-export default function Detail({ target, scope, onBack, openDetail }: Props) {
+export default function Detail({ target, scope, onBack, openDetail, backLabel = "検索へ戻る" }: Props) {
   const [attempt, setAttempt] = useState(0);
   const { request, snapshot } = useLatestRequest<DetailResult>();
   const key = detailKey(target, scope);
@@ -22,7 +22,7 @@ export default function Detail({ target, scope, onBack, openDetail }: Props) {
 
   return (
     <div className="space-y-5">
-      <button type="button" onClick={onBack} className="rounded-md border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-800">検索へ戻る</button>
+      <button type="button" onClick={onBack} className="rounded-md border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-800">{backLabel}</button>
       <p className="text-xs text-neutral-400">対象 scope: {scope || "クライアントの既定値"}</p>
       {busy && <p role="status" className="text-sm text-neutral-400">読み込み中…</p>}
       {current?.status === "error" && (

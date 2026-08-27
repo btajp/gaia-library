@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useServerStatus } from "../hooks/useServerStatus";
+import { ManualSave } from "../lib/manualSave";
+import { ProposalDecisions } from "../lib/proposalDecisions";
 import type { DetailTarget, OpenDetail } from "../types";
+import AddForms from "./AddForms";
+import Proposals from "./Proposals";
+import SaveNotice from "./SaveNotice";
 import Search from "./Search";
 import Detail from "./Detail";
 
@@ -16,20 +21,15 @@ export type WorkspaceTab = (typeof TABS)[number]["id"];
 type WorkspaceProps = {
   tab: WorkspaceTab;
   scope: string;
+  save: ManualSave;
+  decisions: ProposalDecisions;
+  restoreOperation: () => void;
+  showProposals: () => void;
 };
 
-function SearchWorkspace({ scope }: { scope: string }) {
+function Workspace({ tab, scope, save, decisions, restoreOperation, showProposals }: WorkspaceProps) {
   const [detail, setDetail] = useState<DetailTarget | null>(null);
   const openDetail: OpenDetail = (type, id) => setDetail({ type, id });
-  return (
-    <>
-      <div hidden={detail !== null}><Search scope={scope} openDetail={openDetail} /></div>
-      {detail && <Detail target={detail} scope={scope} onBack={() => setDetail(null)} openDetail={openDetail} />}
-    </>
-  );
-}
-
-function Workspace({ tab, scope }: WorkspaceProps) {
   const label = TABS.find((item) => item.id === tab)?.label;
   return (
     <section
@@ -39,13 +39,17 @@ function Workspace({ tab, scope }: WorkspaceProps) {
       tabIndex={0}
       className="rounded-lg border border-neutral-800 bg-neutral-900 p-6"
     >
-      {tab === "search" ? <SearchWorkspace scope={scope} /> : (
-        <>
+      <div hidden={detail !== null}>
+        {tab === "search" && <Search scope={scope} openDetail={openDetail} />}
+        {tab === "proposals" && <Proposals scope={scope} decisions={decisions} openDetail={openDetail} />}
+        {tab === "add" && <AddForms scope={scope} controller={save} openDetail={openDetail} restoreOperation={restoreOperation} showProposals={showProposals} />}
+        {tab === "settings" && <>
           <h2 className="text-xl font-semibold">{label}</h2>
           <p className="mt-3 text-sm text-neutral-400">この画面は準備中です。</p>
           <p className="mt-2 text-sm text-neutral-400">対象 scope: {scope || "クライアントの既定値"}</p>
-        </>
-      )}
+        </>}
+      </div>
+      {detail && <Detail target={detail} scope={scope} onBack={() => setDetail(null)} openDetail={openDetail} backLabel={`${label}へ戻る`} />}
     </section>
   );
 }
@@ -54,6 +58,8 @@ export default function MainShell() {
   const { status, error, loading, refresh } = useServerStatus();
   const [tab, setTab] = useState<WorkspaceTab>("search");
   const [scope, setScope] = useState("");
+  const [save] = useState(() => new ManualSave());
+  const [decisions] = useState(() => new ProposalDecisions());
   const scopeEdited = useRef(false);
   const tabButtons = useRef<Array<HTMLButtonElement | null>>([]);
 
@@ -88,6 +94,14 @@ export default function MainShell() {
 
   const statusError = error ?? status?.error;
   const effectiveScope = scope.trim() || status?.default_scope || "";
+
+  function restoreOperation() {
+    const operation = save.getSnapshot();
+    if (!operation) return;
+    scopeEdited.current = true;
+    setScope(operation.input.scope);
+    setTab("add");
+  }
 
   return (
     <main className="min-h-screen bg-neutral-950 text-neutral-100">
@@ -171,7 +185,8 @@ export default function MainShell() {
             </button>
           ))}
         </nav>
-        <Workspace key={`${tab}:${effectiveScope}`} tab={tab} scope={effectiveScope} />
+        <SaveNotice controller={save} visibleInForm={tab === "add"} onRestore={restoreOperation} />
+        <Workspace key={`${tab}:${effectiveScope}`} tab={tab} scope={effectiveScope} save={save} decisions={decisions} restoreOperation={restoreOperation} showProposals={() => setTab("proposals")} />
       </div>
     </main>
   );
