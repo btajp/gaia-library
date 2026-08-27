@@ -96,6 +96,12 @@ pub mod audit;
 pub mod entities;
 pub mod organizations;
 pub mod people;
+pub mod targets;
+pub mod engagements;
+pub mod interactions;
+pub mod facts;
+pub mod refs;
+pub mod glossary;
 
 /// insert 時の必須文字列。trim して空なら Integrity エラー。
 pub(crate) fn required<'a>(value: Option<&'a str>, what: &str) -> Result<&'a str, StorageError> {
