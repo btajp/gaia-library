@@ -5,7 +5,9 @@ use clap::Subcommand;
 use serde_json::json;
 
 use gaia_core::{
-    config::Config,
+    auth,
+    config::{Config, ConfigError},
+    error::ToolError,
     identity::{ClientIdentity, Role},
 };
 
@@ -32,9 +34,16 @@ pub enum ClientCmd {
         role: Role,
         #[arg(long)]
         default_scope: Option<String>,
+        /// 追加と同時に API キーを発行する（平文は保存成功後に stdout へ 1 回だけ出力）
+        #[arg(long)]
+        generate_key: bool,
     },
     /// 一覧
     List,
+    /// API キーを（再）発行する。旧キーは即失効
+    Keygen { name: String },
+    /// MCP クライアント設定のスニペットを出力する
+    McpConfig(super::mcp_config::McpConfigArgs),
 }
 
 pub fn affiliation(
@@ -78,20 +87,76 @@ pub fn client(config_path: &Path, cmd: &ClientCmd, compact: bool) -> anyhow::Res
             name,
             role,
             default_scope,
+            generate_key,
         } => {
-            Config::update(config_path, |config| {
+            let key = Config::update(config_path, |config| {
                 config.add_client(ClientIdentity {
                     name: name.clone(),
                     role: *role,
                     default_scope: default_scope.clone(),
-                })
-            })?;
-            eprintln!("クライアント `{name}` を追加しました（role={role}）");
+                })?;
+                Ok(generate_key.then(|| {
+                    let (plaintext, hash) = auth::generate_key(name);
+                    config.keys.insert(name.clone(), hash);
+                    plaintext
+                }))
+            })
+            .map_err(config_update_error)?;
+            if compact {
+                let mut output = json!({
+                    "client": name, "role": role, "default_scope": default_scope,
+                });
+                if let Some(key) = key {
+                    output["key"] = json!(key);
+                }
+                print_json(&output, true);
+            } else {
+                if let Some(key) = key {
+                    print_issued_key(name, &key, false);
+                }
+                eprintln!("クライアント `{name}` を追加しました（role={role}）");
+            }
         }
         ClientCmd::List => {
             let config = Config::load(config_path)?;
             print_json(&serde_json::to_value(&config.clients)?, compact);
         }
+        ClientCmd::Keygen { name } => {
+            let key = Config::update(config_path, |config| {
+                if config.client(name).is_none() {
+                    return Err(ConfigError::UnknownClient(name.clone()));
+                }
+                let (plaintext, hash) = auth::generate_key(name);
+                config.keys.insert(name.clone(), hash);
+                Ok(plaintext)
+            })
+            .map_err(config_update_error)?;
+            print_issued_key(name, &key, compact);
+        }
+        ClientCmd::McpConfig(args) => super::mcp_config::print(config_path, args, compact)?,
     }
     Ok(())
+}
+
+fn print_issued_key(name: &str, key: &str, compact: bool) {
+    if compact {
+        print_json(&json!({"client": name, "key": key}), true);
+    } else {
+        println!("{key}");
+        eprintln!(
+            "API キーを発行しました（旧キーは失効。平文はこの 1 回だけ表示し、config にはハッシュのみ保存）"
+        );
+    }
+}
+
+fn config_update_error(error: ConfigError) -> anyhow::Error {
+    match error {
+        ConfigError::UnknownClient(name) => {
+            ToolError::not_found(format!("クライアント `{name}` がありません")).into()
+        }
+        ConfigError::DuplicateClient(name) => {
+            ToolError::conflict(format!("クライアント `{name}` は既に存在します")).into()
+        }
+        error => error.into(),
+    }
 }

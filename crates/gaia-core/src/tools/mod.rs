@@ -280,6 +280,7 @@ mod tests {
         let out = s.call(&agent(), "get_server_info", json!({})).unwrap();
         assert_eq!(out["name"], "gaia_library");
         assert_eq!(out["contract_version"], "1.0.0");
+        assert_eq!(out["protocol"]["transports"], json!(["stdio", "http"]));
         assert_eq!(out["client"]["role"], "agent");
         assert_eq!(out["client"]["default_scope"], "cn");
         let tools: Vec<&str> = out["capabilities"]["tools"]

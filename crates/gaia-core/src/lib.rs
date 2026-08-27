@@ -2,6 +2,7 @@
 //! MCP と CLI はこの crate の `tools::ToolService` だけを入口にする。
 
 pub mod admin;
+pub mod auth;
 pub mod config;
 pub mod contracts;
 pub mod domain;

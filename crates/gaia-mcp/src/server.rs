@@ -5,7 +5,7 @@ use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ErrorCode as RpcErrorCode,
-        Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams,
+        Extensions, Implementation, InitializeResult, ListToolsResult, PaginatedRequestParams,
         ServerCapabilities, ServerInfo, Tool, ToolAnnotations,
     },
     service::RequestContext,
@@ -16,19 +16,50 @@ use gaia_core::{
     contracts::ToolSpec, error::ToolError, identity::ClientIdentity, tools::ToolService,
 };
 
+enum IdentitySource {
+    Fixed(ClientIdentity),
+    FromRequest,
+}
+
 pub struct GaiaServer {
     service: Arc<ToolService>,
-    identity: ClientIdentity,
+    identity: IdentitySource,
 }
 
 impl GaiaServer {
     pub fn new(service: Arc<ToolService>, identity: ClientIdentity) -> Self {
-        Self { service, identity }
+        Self {
+            service,
+            identity: IdentitySource::Fixed(identity),
+        }
     }
 
-    fn tools(&self) -> Vec<Tool> {
+    /// HTTP は Bearer middleware がリクエストごとに検証した識別を使う。
+    pub fn new_http(service: Arc<ToolService>) -> Self {
+        Self {
+            service,
+            identity: IdentitySource::FromRequest,
+        }
+    }
+
+    fn resolve_identity(&self, extensions: &Extensions) -> Result<ClientIdentity, ErrorData> {
+        match &self.identity {
+            IdentitySource::Fixed(identity) => Ok(identity.clone()),
+            IdentitySource::FromRequest => extensions
+                .get::<http::request::Parts>()
+                .and_then(|parts| parts.extensions.get::<ClientIdentity>())
+                .cloned()
+                .ok_or_else(|| {
+                    to_rpc_error(&ToolError::unauthorized(
+                        "missing authenticated client identity",
+                    ))
+                }),
+        }
+    }
+
+    fn tools(&self, identity: &ClientIdentity) -> Vec<Tool> {
         self.service
-            .visible_tools(self.identity.role)
+            .visible_tools(identity.role)
             .into_iter()
             .map(to_tool)
             .collect()
@@ -90,16 +121,18 @@ impl ServerHandler for GaiaServer {
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(self.tools()))
+        let identity = self.resolve_identity(&context.extensions)?;
+        Ok(ListToolsResult::with_all_items(self.tools(&identity)))
     }
 
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        let identity = self.resolve_identity(&context.extensions)?;
         // 未知ツールはプロトコルエラー（業務データの not_found と区別する）
         if self
             .service
@@ -115,10 +148,7 @@ impl ServerHandler for GaiaServer {
             .clone()
             .map(Value::Object)
             .unwrap_or(json!({}));
-        match self
-            .service
-            .call(&self.identity, request.name.as_ref(), args)
-        {
+        match self.service.call(&identity, request.name.as_ref(), args) {
             Ok(v) => Ok(CallToolResult::structured(v).into()),
             Err(e) if e.code.is_protocol_error() => Err(to_rpc_error(&e)),
             Err(e) => Ok(CallToolResult::structured_error(json!({"error": e.to_json()})).into()),
@@ -129,15 +159,42 @@ impl ServerHandler for GaiaServer {
         self.service
             .catalog()
             .get(name)
-            .filter(|s| s.allows(self.identity.role))
+            // HTTP の事前スキーマ検証には request identity がない。
+            // 実際の可視性と認可は list_tools / ToolService::call で強制する。
+            .filter(|spec| match &self.identity {
+                IdentitySource::Fixed(identity) => spec.allows(identity.role),
+                IdentitySource::FromRequest => spec.enabled,
+            })
             .map(to_tool)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{to_tool, unknown_tool_error};
-    use gaia_core::contracts::Catalog;
+    use super::{GaiaServer, to_tool, unknown_tool_error};
+    use gaia_core::{
+        contracts::Catalog,
+        identity::{ClientIdentity, Role},
+        storage::Db,
+        tools::ToolService,
+    };
+    use rmcp::{ServerHandler, model::Extensions};
+    use std::sync::Arc;
+
+    fn service() -> Arc<ToolService> {
+        Arc::new(ToolService::new(
+            Db::open_in_memory().unwrap(),
+            Catalog::embedded().unwrap(),
+        ))
+    }
+
+    fn agent() -> ClientIdentity {
+        ClientIdentity {
+            name: "bot".into(),
+            role: Role::Agent,
+            default_scope: Some("cn".into()),
+        }
+    }
 
     #[test]
     fn to_tool_carries_schema_title_and_annotations() {
@@ -166,5 +223,44 @@ mod tests {
         let data = error.data.expect("structured error data");
         assert_eq!(data["code"], "not_found");
         assert_eq!(data["details"]["tool"], "missing");
+    }
+
+    #[test]
+    fn http_identity_is_resolved_from_each_request() {
+        let server = GaiaServer::new_http(service());
+        for identity in [
+            agent(),
+            ClientIdentity {
+                role: Role::Human,
+                ..agent()
+            },
+        ] {
+            let (mut parts, ()) = http::Request::new(()).into_parts();
+            parts.extensions.insert(identity.clone());
+            let mut extensions = Extensions::new();
+            extensions.insert(parts);
+            assert_eq!(server.resolve_identity(&extensions).unwrap(), identity);
+        }
+    }
+
+    #[test]
+    fn http_identity_missing_is_structured_unauthorized() {
+        let server = GaiaServer::new_http(service());
+        let error = server.resolve_identity(&Extensions::new()).unwrap_err();
+        assert_eq!(error.code.0, -32001);
+        assert_eq!(error.data.unwrap()["code"], "unauthorized");
+    }
+
+    #[test]
+    fn stdio_identity_and_tool_visibility_remain_fixed() {
+        let server = GaiaServer::new(service(), agent());
+        assert_eq!(
+            server.resolve_identity(&Extensions::new()).unwrap(),
+            agent()
+        );
+        assert!(server.get_tool("approve_proposal").is_none());
+        let http = GaiaServer::new_http(service());
+        assert!(http.get_tool("approve_proposal").is_some());
+        assert!(http.get_tool("resolve_source").is_none());
     }
 }

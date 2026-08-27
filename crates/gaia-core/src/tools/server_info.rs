@@ -24,7 +24,7 @@ pub fn handle(
         version: env!("CARGO_PKG_VERSION").to_string(),
         contract_version: ctx.catalog.contract_version.clone(),
         protocol: ServerProtocolInfo {
-            transports: vec!["stdio".to_string()],
+            transports: vec!["stdio".to_string(), "http".to_string()],
         },
         capabilities: ServerCapabilitiesInfo {
             tools,
