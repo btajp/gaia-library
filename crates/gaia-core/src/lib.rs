@@ -3,6 +3,7 @@
 
 pub mod config;
 pub mod contracts;
+pub mod domain;
 pub mod error;
 pub mod identity;
 pub mod storage;
