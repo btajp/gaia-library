@@ -7,10 +7,8 @@ use rusqlite_migration::{M, Migrations};
 
 use crate::error::ToolError;
 
-pub fn get_migrations() -> Migrations<'static> {
-    const MIGRATIONS_DATA: &[M<'static>] = &[M::up(include_str!("../../migrations/0001_init.sql"))];
-    Migrations::from_slice(MIGRATIONS_DATA)
-}
+const MIGRATION_SLICE: &[M<'static>] = &[M::up(include_str!("../../migrations/0001_init.sql"))];
+pub const MIGRATIONS: Migrations<'static> = Migrations::from_slice(MIGRATION_SLICE);
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
@@ -51,7 +49,7 @@ impl Db {
         }
         let mut conn = Connection::open(path)?;
         configure(&mut conn)?;
-        get_migrations().to_latest(&mut conn)?;
+        MIGRATIONS.to_latest(&mut conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -60,7 +58,7 @@ impl Db {
     pub fn open_in_memory() -> Result<Self, StorageError> {
         let mut conn = Connection::open_in_memory()?;
         configure(&mut conn)?;
-        get_migrations().to_latest(&mut conn)?;
+        MIGRATIONS.to_latest(&mut conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -123,7 +121,7 @@ mod tests {
 
     #[test]
     fn migrations_are_valid() {
-        get_migrations().validate().unwrap();
+        MIGRATIONS.validate().unwrap();
     }
 
     #[test]
