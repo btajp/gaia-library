@@ -577,3 +577,7 @@ Notion ドラフトを基に、本セッションの決定（workspace 構成、
 - FTS trigram は日本語の同義・活用に弱い。検索が実際に失敗し始めたら lindera-sqlite への格上げを検討する
 - `Mutex<Connection>` の単一接続は、HTTP で同時接続が増えた場合に見直す可能性がある
 - typify の生成コードが `regress` などの追加依存を要求しないよう、契約に `pattern` を使わない運用を守る必要がある
+
+### 実装実績（2026-08-27、サブプロジェクト A 完了時点）
+
+計画からの逸脱は軽微で、次の 3 点のみ: (1) `build.rs` ほか計 5 箇所で clippy 起因の let-chain / `assert!` / ptr_arg 修正、(2) `const MIGRATIONS` を named-const-slice 経由に変更、(3) CLI `reject` で `--reason` 省略時に null を送らずキー自体を省略する対応。typify が契約から生成した型は想定どおりで、テスト側の追加調整は不要だった。B（HTTP＋認証）・C（デスクトップ）に影響する設計上の齟齬はなし。

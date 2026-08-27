@@ -11,3 +11,31 @@
 cargo build --workspace
 cargo test --workspace
 ```
+
+## セットアップ
+
+```sh
+cargo install --path crates/gaia   # または cargo run -p gaia --
+gaia init --affiliation <所属元名>              # 設定と DB を作成
+gaia client add claude-code --role agent --default-scope <所属元名>
+```
+
+## MCP クライアントからの接続（stdio）
+
+`.mcp.json` などに登録する:
+
+```json
+{
+  "mcpServers": {
+    "gaia_library": { "command": "gaia", "args": ["serve", "--stdio", "--client", "claude-code"] }
+  }
+}
+```
+
+## 日常の使い方
+
+```sh
+gaia add person --name "岡村 慎太郎" --alias okash1n   # 手入力（提案＋即時承認）
+gaia search "Okta"                                     # 回答の設計図を得る
+gaia proposals && gaia approve <id>                    # エージェントの提案を承認
+```

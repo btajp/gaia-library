@@ -13,7 +13,7 @@
 - crates/gaia-core: 契約ロード（`contracts::Catalog`）・SQLite（`storage`）・ドメイン（`domain`）・scope（`scope::ScopeSet`）・`tools::ToolService`。rmcp を知らない
 - crates/gaia-mcp: rmcp の `ServerHandler` 手動実装と stdio 起動。依存は gaia-core のみ
 - crates/gaia: CLI `gaia`。全コマンドが `ToolService::call` を呼ぶ（設定ファイルと `affiliations` の管理コマンドだけが例外）
-- 依存方向は gaia → gaia-mcp → gaia-core の一方向。gaia-mcp と gaia は `ToolService` / `contracts` / `config` / `identity` / `admin` / `storage::Db` 以外の core API を使わない
+- 依存方向は gaia → gaia-mcp → gaia-core の一方向。gaia-mcp と gaia は `ToolService` / `contracts` / `config` / `identity` / `admin` / `storage::Db` / `error` 以外の core API を使わない
 
 ## データモデル（DDL v1）
 - 名寄せ層（共有・scope なし）: people / person_aliases / organizations / entities / affiliations（scope の値域定義）
@@ -31,7 +31,7 @@
 5. stdio の役割分離は「エージェントが MCP 経由で誤って承認する」ことを防ぐ仕組みであり、同一 OS ユーザーのシェルから human 識別で起動することは防げない。API キー検証は HTTP 実装時に追加する
 
 ## 公開ツール（v1 契約、contracts/manifest.json が正本）
-- 参照系（readOnlyHint）: search_context / get_person / get_organization / get_engagement / get_glossary / resolve_speakers / resolve_source（契約のみ。未登録）
+- 参照系（readOnlyHint）: search_context / get_person / get_organization / get_engagement / get_glossary / resolve_speakers（実装済み・登録済み）/ resolve_source（契約のみ。未登録）
 - 提案系: propose_update / list_proposals / approve_proposal（human）/ reject_proposal（human）
 - 共通: get_server_info / get_job_status（v1 は常に not_found）
 - 書き込みはクライアント発番の request_id で冪等化。エラーは構造化コード（not_found / scope_denied / unauthorized / invalid_params / contract_mismatch / conflict / busy / not_implemented / internal）
