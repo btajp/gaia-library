@@ -3,3 +3,5 @@
 *.db-wal
 *.db-shm
 .env
+/desktop/src-tauri/target
+/desktop/src-tauri/binaries
