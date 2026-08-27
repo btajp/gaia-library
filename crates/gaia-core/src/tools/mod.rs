@@ -1,6 +1,7 @@
 //! ToolService: CLI と MCP の唯一の入口。仕様書 §8.1。
 //! 手順: ツール解決 → role 認可 → 契約スキーマで入力検証 → 型付きハンドラ → （debug/test）出力検証。
 mod job_status;
+mod propose;
 mod server_info;
 
 use serde::{Serialize, de::DeserializeOwned};
@@ -14,7 +15,14 @@ use crate::{
 };
 
 /// dispatch 済みツール。Task 16 完了時に「enabled な契約 = この一覧」となる（テストで固定）。
-pub const HANDLED_TOOLS: &[&str] = &["get_server_info", "get_job_status"];
+pub const HANDLED_TOOLS: &[&str] = &[
+    "get_server_info",
+    "get_job_status",
+    "propose_update",
+    "list_proposals",
+    "approve_proposal",
+    "reject_proposal",
+];
 
 pub struct ToolService {
     db: Db,
@@ -80,6 +88,10 @@ fn dispatch(ctx: &CallContext<'_>, tool: &str, args: Value) -> Result<Value, Too
     match tool {
         "get_server_info" => run(ctx, args, server_info::handle),
         "get_job_status" => run(ctx, args, job_status::handle),
+        "propose_update" => run(ctx, args, propose::propose_update),
+        "list_proposals" => run(ctx, args, propose::list_proposals),
+        "approve_proposal" => run(ctx, args, propose::approve_proposal),
+        "reject_proposal" => run(ctx, args, propose::reject_proposal),
         other => Err(ToolError::not_implemented(format!(
             "tool `{other}` has no handler yet"
         ))),
@@ -112,6 +124,10 @@ pub(crate) mod test_support {
         identity::{ClientIdentity, Role},
         storage::{Db, StorageError, affiliations},
     };
+    use serde_json::json;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
 
     pub(crate) fn service() -> ToolService {
         let db = Db::open_in_memory().unwrap();
@@ -137,6 +153,94 @@ pub(crate) mod test_support {
             name: "bot".into(),
             role: Role::Agent,
             default_scope: Some("cn".into()),
+        }
+    }
+
+    pub(crate) struct SeedIds {
+        pub org: i64,
+        pub person: i64,
+        pub engagement: i64,
+        pub fact: i64,
+        pub reference: i64,
+        pub glossary: i64,
+        pub interaction: i64,
+    }
+
+    /// human クライアントで propose → approve を回す（書き込み経路そのものをテストデータ投入に使う）。
+    pub(crate) fn write(s: &ToolService, target_type: &str, patch: serde_json::Value) -> i64 {
+        let h = human();
+        let out = s
+            .call(&h, "propose_update", json!({
+                "target_type": target_type, "action": "insert", "patch": patch, "kind": "fact",
+                "request_id": format!("seed-{target_type}-{:04}", SEQ.fetch_add(1, Ordering::SeqCst)),
+            }))
+            .unwrap();
+        let pid = out["proposal_id"].as_i64().unwrap();
+        let approved = s
+            .call(&h, "approve_proposal", json!({"proposal_id": pid}))
+            .unwrap();
+        approved["result"]["id"].as_i64().unwrap()
+    }
+
+    pub(crate) fn seed_basic(s: &ToolService) -> SeedIds {
+        let org = write(
+            s,
+            "organization",
+            json!({"name": "RELATIONS", "kind": "customer"}),
+        );
+        let person = write(
+            s,
+            "person",
+            json!({
+                "name": "岡村 慎太郎", "org_id": org, "role": "情シス",
+                "aliases": [{"alias": "Okamura Shintaro", "kind": "romaji"}, {"alias": "okash1n", "kind": "nickname"}]
+            }),
+        );
+        let engagement = write(
+            s,
+            "engagement",
+            json!({
+                "name": "Okta導入支援", "org_id": org, "status": "active",
+                "people": [{"person_id": person, "role": "key_person"}]
+            }),
+        );
+        let fact = write(
+            s,
+            "fact",
+            json!({
+                "entity_type": "engagement", "entity_id": engagement,
+                "statement": "決定: SCIM プロビジョニングは Phase 2 で対応する", "predicate": "decision", "value": "scim-phase2"
+            }),
+        );
+        let reference = write(
+            s,
+            "ref",
+            json!({
+                "target_type": "fact", "target_id": fact, "system": "minutes",
+                "uri": "minutes://meeting/42#t=1200", "note": "決定箇所の議事録参照", "snapshot": "SCIM は Phase 2"
+            }),
+        );
+        let glossary = write(
+            s,
+            "glossary",
+            json!({"term": "SCIM", "reading": "スキム", "definition": "プロビジョニング標準", "engagement_id": engagement}),
+        );
+        let interaction = write(
+            s,
+            "interaction",
+            json!({
+                "kind": "meeting", "occurred_at": "2026-08-20T10:00:00Z",
+                "summary": "定例。SCIM の段階対応を決定", "engagement_id": engagement, "person_ids": [person]
+            }),
+        );
+        SeedIds {
+            org,
+            person,
+            engagement,
+            fact,
+            reference,
+            glossary,
+            interaction,
         }
     }
 }
