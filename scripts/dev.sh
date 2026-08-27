@@ -11,7 +11,9 @@ if [[ -n "${NARUMI_BIN:-}" && -x "${NARUMI_BIN}" ]]; then
   }
   trap cleanup EXIT
   echo "narumi HTTP server started (pid ${NARUMI_PID}, port ${NARUMI_PORT:-8765})" >&2
-else
+elif [[ -z "${NARUMI_BIN:-}" ]]; then
   echo "narumi not found (NARUMI_BIN unset); continuing without it" >&2
+else
+  echo "narumi not executable (NARUMI_BIN is set); continuing without it" >&2
 fi
 cargo run -p gaia -- "$@"
