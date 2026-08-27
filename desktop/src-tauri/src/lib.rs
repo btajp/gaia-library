@@ -7,6 +7,9 @@ pub mod keychain;
 mod lifecycle;
 mod settings_commands;
 mod state;
+mod update_menu;
+mod updater;
+pub mod updater_signature;
 
 pub fn run() {
     tauri::Builder::default()
@@ -17,6 +20,7 @@ pub fn run() {
         .manage(lifecycle::ExitState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_log::Builder::default()
                 .level(log::LevelFilter::Info)
@@ -33,6 +37,7 @@ pub fn run() {
             commands::first_run_setup,
             commands::call_tool,
             commands::server_status,
+            commands::check_updates,
             settings_commands::admin_affiliation_add,
             settings_commands::admin_affiliation_list,
             settings_commands::admin_client_add,
@@ -43,6 +48,7 @@ pub fn run() {
             settings_commands::cli_link_create,
         ])
         .setup(lifecycle::setup)
+        .on_menu_event(update_menu::on_menu_event)
         .on_window_event(|window, event| {
             if window.label() == "main"
                 && let tauri::WindowEvent::CloseRequested { api, .. } = event

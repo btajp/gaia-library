@@ -28,6 +28,12 @@
       }
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDEzRDAzQzk4QURDMTM4RTkKUldUcE9NR3RtRHpRRXdEUkRsZ0U2STArWnBRVTlDbjA1dStENXl5bmpVS1I2amErdnNZYlpvTE4K",
+      "endpoints": ["https://github.com/btajp/gaia-library/releases/latest/download/latest.json"]
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",

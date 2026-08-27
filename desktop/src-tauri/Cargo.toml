@@ -1,10 +1,19 @@
 [package]
 name = "gaia-desktop"
 version = "0.1.0"
+default-run = "gaia-desktop"
 description = "gaia-library desktop shell"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
+
+[features]
+updater-verifier = []
+
+[[bin]]
+name = "verify-updater-signature"
+path = "src/bin/verify-updater-signature.rs"
+required-features = ["updater-verifier"]
 
 [lib]
 name = "gaia_desktop_lib"
@@ -29,6 +38,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-log = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "io-util", "time"] }
 uuid = { version = "1", features = ["v4"] }

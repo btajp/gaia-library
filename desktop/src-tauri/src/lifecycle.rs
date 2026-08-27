@@ -40,6 +40,7 @@ pub(crate) fn show_main(app: &AppHandle) {
 }
 
 pub(crate) fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
+    crate::update_menu::setup(app)?;
     let show = MenuItem::with_id(app, "show-main", "gaia-library を開く", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit-app", "終了", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
@@ -66,6 +67,7 @@ pub(crate) fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
             log::warn!("HTTP サーバーは起動できませんでした: {error}");
         }
     });
+    crate::updater::spawn_startup_check(app.handle().clone());
     Ok(())
 }
 

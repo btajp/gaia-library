@@ -45,3 +45,4 @@ export const mcpConfigSnippet = (name: string, transport: Transport) =>
 export const cliLinkStatus = () => invoke<CliLinkStatus>("cli_link_status");
 export const cliLinkCreate = (expectedTarget: string | null) => invoke<null>("cli_link_create", { expectedTarget });
 export const appVersion = () => getVersion();
+export const checkUpdates = () => invoke<void>("check_updates");

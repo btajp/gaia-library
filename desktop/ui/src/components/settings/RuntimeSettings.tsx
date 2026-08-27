@@ -1,8 +1,8 @@
 import { errorMessage, type ServerStatus } from "../../api";
 import { useServerStatus } from "../../hooks/useServerStatus";
-import { appVersion } from "../../settingsApi";
-import { ReloadButton, SettingsError, SettingsSection } from "./SettingsParts";
-import { useSettingsResource } from "./useSettingsState";
+import { appVersion, checkUpdates } from "../../settingsApi";
+import { buttonClass, ReloadButton, SettingsError, SettingsSection } from "./SettingsParts";
+import { useSettingsAction, useSettingsResource } from "./useSettingsState";
 
 export function ServerStatusContent({ status, error, loading }: { status: ServerStatus | null; error: string | null; loading: boolean }) {
   if (error) return <SettingsError>現在のサーバー状態を取得できませんでした。{error}</SettingsError>;
@@ -31,11 +31,17 @@ export function ServerSettings() {
 
 export function VersionSettings() {
   const { snapshot, refresh, loading } = useSettingsResource(appVersion);
+  const update = useSettingsAction<void>();
   return (
     <SettingsSection id="settings-version" title="バージョン">
       {snapshot.status === "success" && <p className="text-sm text-neutral-300">gaia-library {snapshot.data}</p>}
       {snapshot.status === "error" && <SettingsError>バージョンを取得できませんでした。{errorMessage(snapshot.error)}</SettingsError>}
       <ReloadButton loading={loading} refresh={() => void refresh()} />
+      <div className="space-y-3 border-t border-neutral-800 pt-4">
+        <button type="button" disabled={update.busy} onClick={() => void update.action.run(checkUpdates)} className={buttonClass}>{update.busy ? "確認を開始中…" : "アップデートを確認…"}</button>
+        <p className="text-xs leading-5 text-neutral-400">確認結果はアプリのダイアログに表示します。更新の適用と再起動は、その画面で選択できます。進行状況はアプリメニューにも表示します。</p>
+        {update.snapshot.status === "error" && <SettingsError>更新の確認を開始できませんでした。{errorMessage(update.snapshot.error)}</SettingsError>}
+      </div>
     </SettingsSection>
   );
 }

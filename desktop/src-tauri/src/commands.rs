@@ -54,3 +54,8 @@ pub fn call_tool(
 pub async fn server_status(state: State<'_, DesktopState>) -> Result<ServerStatus, String> {
     Ok(state.server_status().await)
 }
+
+#[tauri::command]
+pub fn check_updates(app: tauri::AppHandle) {
+    crate::updater::spawn_manual_check(app);
+}

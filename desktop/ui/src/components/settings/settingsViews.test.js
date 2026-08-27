@@ -18,6 +18,8 @@ describe("settings screen markup", () => {
     const html = renderToStaticMarkup(createElement(StrictMode, null, createElement(Settings)));
     for (const title of ["所属元", "クライアントと接続キー", "HTTP サーバー", "同梱 CLI", "バージョン"]) expect(html).toContain(title);
     expect(html).toContain("読込中…");
+    expect(html).toContain("アップデートを確認…");
+    expect(html).toContain("更新の適用と再起動は、その画面で選択できます");
     expect(html).not.toContain("<textarea");
     expect(html).not.toContain("Authorization");
     expect(invoke).not.toHaveBeenCalled();

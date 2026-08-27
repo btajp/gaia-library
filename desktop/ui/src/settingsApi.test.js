@@ -8,6 +8,13 @@ const api = await import("./settingsApi");
 beforeEach(() => { invoke.mockReset(); getVersion.mockClear(); });
 
 describe("settings IPC boundary", () => {
+  it("starts the shared native update check only when explicitly invoked", async () => {
+    invoke.mockResolvedValueOnce(undefined);
+    await api.checkUpdates();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith("check_updates");
+  });
+
   it("lists affiliation metadata without issuing or loading a key", async () => {
     const rows = [{ id: 1, name: "personal", identity: null }];
     invoke.mockResolvedValueOnce(rows);
