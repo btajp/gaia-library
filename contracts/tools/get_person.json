@@ -1,0 +1,27 @@
+{
+  "name": "get_person",
+  "title": "人物の詳細",
+  "description": "person_id または name（氏名・alias）で人物を特定し、所属組織・関わる案件・facts・refs・直近の interactions を scope 内で返す。name が複数件に該当した場合は conflict エラーで候補を返す。",
+  "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "person_id": { "type": "integer" },
+      "name": { "type": "string" },
+      "scope": { "$ref": "../defs/common.json#/$defs/ScopeInput" }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": ["person", "engagements", "facts", "refs", "interactions"],
+    "properties": {
+      "person": { "$ref": "../defs/common.json#/$defs/PersonSummary" },
+      "organization": { "$ref": "../defs/common.json#/$defs/OrganizationSummary" },
+      "engagements": { "type": "array", "items": { "$ref": "../defs/common.json#/$defs/EngagementSummary" } },
+      "facts": { "type": "array", "items": { "$ref": "../defs/common.json#/$defs/Fact" } },
+      "refs": { "type": "array", "items": { "$ref": "../defs/common.json#/$defs/Reference" } },
+      "interactions": { "type": "array", "items": { "$ref": "../defs/common.json#/$defs/InteractionSummary" } }
+    }
+  }
+}

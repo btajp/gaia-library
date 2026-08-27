@@ -271,4 +271,49 @@ mod tests {
         };
         assert_eq!(serde_json::to_value(&out).unwrap()["status"], "unknown");
     }
+
+    #[test]
+    fn all_thirteen_tools_load_and_roles_match_spec() {
+        let c = Catalog::embedded().unwrap();
+        assert_eq!(c.tools().len(), 13);
+        let agent: Vec<&str> = c
+            .visible(Role::Agent)
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
+        assert!(!agent.contains(&"approve_proposal"));
+        assert!(!agent.contains(&"reject_proposal"));
+        assert!(
+            !agent.contains(&"resolve_source"),
+            "disabled tool must not be visible"
+        );
+        let human: Vec<&str> = c
+            .visible(Role::Human)
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
+        assert!(human.contains(&"approve_proposal"));
+        assert_eq!(human.len(), 12);
+    }
+
+    #[test]
+    fn scope_input_accepts_string_and_array() {
+        let a: types::ScopeInput = serde_json::from_value(json!("cloudnative")).unwrap();
+        let b: types::ScopeInput = serde_json::from_value(json!(["a", "b"])).unwrap();
+        assert!(matches!(a, types::ScopeInput::String(_)));
+        assert!(matches!(b, types::ScopeInput::Array(_)));
+        let input: types::SearchContextInput =
+            serde_json::from_value(json!({"query": "q"})).unwrap();
+        assert_eq!(input.limit, 10);
+        assert!(input.types.is_empty());
+    }
+
+    #[test]
+    fn input_validators_reject_unknown_fields() {
+        let c = Catalog::embedded().unwrap();
+        let err = c.get("propose_update").unwrap().validate_input(&json!({
+            "target_type": "person", "action": "insert", "patch": {}, "kind": "fact", "request_id": "r-00000001", "bogus": 1
+        })).unwrap_err();
+        assert_eq!(err.code, crate::error::ErrorCode::InvalidParams);
+    }
 }

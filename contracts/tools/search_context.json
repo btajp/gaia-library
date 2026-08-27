@@ -1,0 +1,30 @@
+{
+  "name": "search_context",
+  "title": "コンテキスト横断検索",
+  "description": "人物・組織・案件・汎用エンティティの名前と alias、facts の全文（trigram）、interactions の要約、用語集を横断検索し、「回答の設計図」を返す: 関連エンティティごとに facts の要点と、何がどこにあるかの注記付き参照（refs）。返った refs はクライアント側のコネクタ（Notion / Box / ファイル等）で辿ること。scope 省略時はクライアントの既定 scope。",
+  "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+  "inputSchema": {
+    "type": "object",
+    "required": ["query"],
+    "additionalProperties": false,
+    "properties": {
+      "query": { "type": "string", "description": "検索語。3 文字未満は部分一致にフォールバックする" },
+      "scope": { "$ref": "../defs/common.json#/$defs/ScopeInput" },
+      "types": { "type": "array", "items": { "$ref": "../defs/common.json#/$defs/SearchType" }, "description": "省略時は全種別" },
+      "limit": { "type": "integer", "default": 10, "description": "エンティティ件数の上限（1〜50）" }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": ["query", "scopes", "cross_scope", "entities", "glossary", "interactions", "hints"],
+    "properties": {
+      "query": { "type": "string" },
+      "scopes": { "type": "array", "items": { "type": "string" } },
+      "cross_scope": { "type": "boolean" },
+      "entities": { "type": "array", "items": { "$ref": "../defs/common.json#/$defs/SearchEntity" } },
+      "glossary": { "type": "array", "items": { "$ref": "../defs/common.json#/$defs/GlossaryTerm" } },
+      "interactions": { "type": "array", "items": { "$ref": "../defs/common.json#/$defs/InteractionSummary" } },
+      "hints": { "type": "array", "items": { "type": "string" } }
+    }
+  }
+}

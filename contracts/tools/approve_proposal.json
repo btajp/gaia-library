@@ -1,0 +1,21 @@
+{
+  "name": "approve_proposal",
+  "title": "提案の承認（human のみ）",
+  "description": "pending の提案を検証して適用し、承認済みにする。human ロールのクライアントだけが呼べる。検証に失敗した場合は提案を pending のまま残してエラーを返す。",
+  "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": false },
+  "inputSchema": {
+    "type": "object",
+    "required": ["proposal_id"],
+    "additionalProperties": false,
+    "properties": { "proposal_id": { "type": "integer" } }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": ["proposal_id", "status", "result"],
+    "properties": {
+      "proposal_id": { "type": "integer" },
+      "status": { "$ref": "../defs/common.json#/$defs/ProposalStatus" },
+      "result": { "$ref": "../defs/common.json#/$defs/ApplyResult" }
+    }
+  }
+}

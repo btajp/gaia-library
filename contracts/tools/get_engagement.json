@@ -1,0 +1,28 @@
+{
+  "name": "get_engagement",
+  "title": "案件の詳細",
+  "description": "engagement_id または name で案件を特定し、相手組織・関係者（役割と alias 付き）・facts・refs・用語集・直近の interactions を返す。案件が scope 外なら not_found。",
+  "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "engagement_id": { "type": "integer" },
+      "name": { "type": "string" },
+      "scope": { "$ref": "../defs/common.json#/$defs/ScopeInput" }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "required": ["engagement", "people", "facts", "refs", "glossary", "interactions"],
+    "properties": {
+      "engagement": { "$ref": "../defs/common.json#/$defs/EngagementSummary" },
+      "organization": { "$ref": "../defs/common.json#/$defs/OrganizationSummary" },
+      "people": { "type": "array", "items": { "$ref": "../defs/common.json#/$defs/EngagementPerson" } },
+      "facts": { "type": "array", "items": { "$ref": "../defs/common.json#/$defs/Fact" } },
+      "refs": { "type": "array", "items": { "$ref": "../defs/common.json#/$defs/Reference" } },
+      "glossary": { "type": "array", "items": { "$ref": "../defs/common.json#/$defs/GlossaryTerm" } },
+      "interactions": { "type": "array", "items": { "$ref": "../defs/common.json#/$defs/InteractionSummary" } }
+    }
+  }
+}
