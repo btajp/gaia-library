@@ -26,8 +26,8 @@
 
 | 場所 | 変更 |
 | --- | --- |
-| `gaia-core` config | `ClientIdentity` に `key_hash: Option<String>` を追加（認証材料。ツール出力 `ClientInfo` には含めない）。`[server] port: Option<u16>` を追加 |
-| `gaia-core` 新規 | `auth` モジュール: キー生成 `generate_key(name) -> (plaintext, hash)`、`hash_key(&str) -> String`（SHA-256 hex）、`AuthTable`（name→(hash, identity)。`verify(bearer) -> Option<ClientIdentity>`、比較は constant-time） |
+| `gaia-core` config | `Config` に `[keys]` テーブル（クライアント名 → SHA-256 hex）と `[server] port: Option<u16>` を追加。`ClientIdentity` は変更しない（識別と認証材料を分離し、既存の構築箇所を壊さない） |
+| `gaia-core` 新規 | `auth` モジュール: キー生成 `generate_key(name) -> (plaintext, hash)`、`hash_key(&str) -> String`（SHA-256 hex）、`AuthTable`（`[keys]` と `[[clients]]` の突合。`verify(bearer) -> Option<ClientIdentity>`、比較は constant-time） |
 | `gaia-mcp` | `GaiaServer` の識別を `IdentitySource::{Fixed(ClientIdentity), FromRequest}` に拡張（FromRequest は extensions から取り出し、無ければ JSON-RPC `-32001`）。新規 `http.rs`: `serve_http(service: Arc<ToolService>, auth: Arc<AuthTable>, addr: SocketAddr, shutdown: CancellationToken) -> Result<BoundServer, ServeError>`（`BoundServer.local_addr()` で実ポートを返す。`--port 0` で ephemeral 可） |
 | `gaia` CLI | `gaia serve --http [--port N]`（127.0.0.1 バインド。ポート未指定は 4111→4114 フォールバック）／`gaia client add ... --generate-key`／`gaia client keygen <name>`（再発行）／`gaia client mcp-config <name> [--transport stdio\|http]`（`.mcp.json` 用スニペット出力） |
 | contracts | 変更なし（`transports` の値のみ更新） |
@@ -39,7 +39,7 @@
 ### 4.1 認証（gaia-core::auth）
 
 - `generate_key(name: &str) -> (String, String)`: 平文 `gaia_{name}_{hex32}`（`rand` の OS 乱数 16 バイト）とその SHA-256 hex を返す
-- `AuthTable::from_config(&Config) -> AuthTable`: `key_hash` を持つクライアントだけを収載。`verify(&self, bearer: &str) -> Option<ClientIdentity>` は `subtle::ConstantTimeEq` でハッシュ比較
+- `AuthTable::from_config(&Config) -> AuthTable`: `[keys]` にエントリがあり `[[clients]]` に定義のある名前だけを収載。`verify(&self, bearer: &str) -> Option<ClientIdentity>` は入力の SHA-256 を全エントリと `subtle::ConstantTimeEq` で比較（早期 return しない）
 - `gaia client add --generate-key` / `gaia client keygen`: 平文を stderr に 1 度だけ表示し、config には hash を保存。keygen は既存 hash を置き換える（旧キーは即失効）
 
 ### 4.2 HTTP サーバー（gaia-mcp::http）
