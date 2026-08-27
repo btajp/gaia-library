@@ -16,7 +16,11 @@ pub struct ScopeSet {
 
 impl ScopeSet {
     /// 引数 → クライアント既定 scope → `scope_denied`。各 scope は affiliations に存在すること（無ければ `not_found`）。
-    pub fn resolve(conn: &Connection, client: &ClientIdentity, requested: Option<Vec<String>>) -> Result<Self, ToolError> {
+    pub fn resolve(
+        conn: &Connection,
+        client: &ClientIdentity,
+        requested: Option<Vec<String>>,
+    ) -> Result<Self, ToolError> {
         let mut scopes = match requested {
             Some(v) if !v.is_empty() => v,
             _ => vec![client.default_scope.clone().ok_or_else(|| {
@@ -30,7 +34,9 @@ impl ScopeSet {
         scopes.dedup();
         for s in &scopes {
             if !affiliations::exists(conn, s)? {
-                return Err(ToolError::not_found(format!("scope `{s}` (affiliation) not found")));
+                return Err(ToolError::not_found(format!(
+                    "scope `{s}` (affiliation) not found"
+                )));
             }
         }
         Ok(Self { scopes })
@@ -38,7 +44,9 @@ impl ScopeSet {
 
     /// 検証なしで 1 scope を包む（承認処理など scope が既に DB 由来のとき用）。
     pub fn single(name: &str) -> Self {
-        Self { scopes: vec![name.to_string()] }
+        Self {
+            scopes: vec![name.to_string()],
+        }
     }
 
     pub fn names(&self) -> &[String] {
@@ -59,9 +67,19 @@ impl ScopeSet {
     }
 
     /// 複数 scope の明示指定時だけ監査ログに残す。
-    pub fn audit_cross_read(&self, conn: &Connection, actor: &str, tool: &str) -> Result<(), ToolError> {
+    pub fn audit_cross_read(
+        &self,
+        conn: &Connection,
+        actor: &str,
+        tool: &str,
+    ) -> Result<(), ToolError> {
         if self.is_cross() {
-            audit::record(conn, actor, "cross_scope_read", &json!({ "tool": tool, "scopes": self.scopes }))?;
+            audit::record(
+                conn,
+                actor,
+                "cross_scope_read",
+                &json!({ "tool": tool, "scopes": self.scopes }),
+            )?;
         }
         Ok(())
     }
@@ -78,10 +96,18 @@ pub fn scope_input_to_vec(input: Option<&ScopeInput>) -> Option<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{error::ErrorCode, identity::Role, storage::{Db, StorageError, affiliations, audit}};
+    use crate::{
+        error::ErrorCode,
+        identity::Role,
+        storage::{Db, StorageError, affiliations, audit},
+    };
 
     fn client(default_scope: Option<&str>) -> ClientIdentity {
-        ClientIdentity { name: "bot".into(), role: Role::Agent, default_scope: default_scope.map(String::from) }
+        ClientIdentity {
+            name: "bot".into(),
+            role: Role::Agent,
+            default_scope: default_scope.map(String::from),
+        }
     }
 
     fn db() -> Db {
@@ -104,7 +130,10 @@ mod tests {
             assert!(!s.is_cross());
             assert_eq!(s.as_json(), "[\"a\"]");
             s.audit_cross_read(c, "bot", "search_context")?;
-            assert!(audit::recent(c, 10)?.is_empty(), "single scope must not be audited");
+            assert!(
+                audit::recent(c, 10)?.is_empty(),
+                "single scope must not be audited"
+            );
             Ok(())
         })
         .unwrap();
@@ -114,7 +143,11 @@ mod tests {
     fn multiple_scopes_are_sorted_deduped_and_audited() {
         let db = db();
         db.with_conn::<_, ToolError>(|c| {
-            let s = ScopeSet::resolve(c, &client(None), Some(vec!["b".into(), "a".into(), "b".into()]))?;
+            let s = ScopeSet::resolve(
+                c,
+                &client(None),
+                Some(vec!["b".into(), "a".into(), "b".into()]),
+            )?;
             assert_eq!(s.names(), ["a", "b"]);
             assert!(s.is_cross());
             assert!(s.contains("b"));
@@ -132,10 +165,20 @@ mod tests {
     fn missing_scope_is_denied_and_unknown_scope_is_not_found() {
         let db = db();
         db.with_conn::<_, StorageError>(|c| {
-            assert_eq!(ScopeSet::resolve(c, &client(None), None).unwrap_err().code, ErrorCode::ScopeDenied);
-            assert_eq!(ScopeSet::resolve(c, &client(None), Some(vec![])).unwrap_err().code, ErrorCode::ScopeDenied);
             assert_eq!(
-                ScopeSet::resolve(c, &client(Some("a")), Some(vec!["zzz".into()])).unwrap_err().code,
+                ScopeSet::resolve(c, &client(None), None).unwrap_err().code,
+                ErrorCode::ScopeDenied
+            );
+            assert_eq!(
+                ScopeSet::resolve(c, &client(None), Some(vec![]))
+                    .unwrap_err()
+                    .code,
+                ErrorCode::ScopeDenied
+            );
+            assert_eq!(
+                ScopeSet::resolve(c, &client(Some("a")), Some(vec!["zzz".into()]))
+                    .unwrap_err()
+                    .code,
                 ErrorCode::NotFound
             );
             Ok(())
@@ -147,7 +190,13 @@ mod tests {
     fn scope_input_converts_string_and_array() {
         use crate::contracts::types::ScopeInput;
         assert_eq!(scope_input_to_vec(None), None);
-        assert_eq!(scope_input_to_vec(Some(&ScopeInput::String("a".into()))), Some(vec!["a".to_string()]));
-        assert_eq!(scope_input_to_vec(Some(&ScopeInput::Array(vec!["a".into(), "b".into()]))), Some(vec!["a".to_string(), "b".to_string()]));
+        assert_eq!(
+            scope_input_to_vec(Some(&ScopeInput::String("a".into()))),
+            Some(vec!["a".to_string()])
+        );
+        assert_eq!(
+            scope_input_to_vec(Some(&ScopeInput::Array(vec!["a".into(), "b".into()]))),
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
     }
 }

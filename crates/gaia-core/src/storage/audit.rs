@@ -13,7 +13,12 @@ pub struct AuditEntry {
     pub at: String,
 }
 
-pub fn record(conn: &Connection, actor: &str, action: &str, detail: &Value) -> Result<i64, StorageError> {
+pub fn record(
+    conn: &Connection,
+    actor: &str,
+    action: &str,
+    detail: &Value,
+) -> Result<i64, StorageError> {
     conn.execute(
         "INSERT INTO audit_log(actor, action, detail) VALUES (?1, ?2, ?3)",
         params![actor, action, detail.to_string()],
@@ -22,15 +27,28 @@ pub fn record(conn: &Connection, actor: &str, action: &str, detail: &Value) -> R
 }
 
 pub fn recent(conn: &Connection, limit: usize) -> Result<Vec<AuditEntry>, StorageError> {
-    let mut stmt = conn.prepare("SELECT id, actor, action, detail, at FROM audit_log ORDER BY id DESC LIMIT ?1")?;
+    let mut stmt = conn
+        .prepare("SELECT id, actor, action, detail, at FROM audit_log ORDER BY id DESC LIMIT ?1")?;
     let rows = stmt.query_map(params![limit as i64], |r| {
         let raw: String = r.get(3)?;
-        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, raw, r.get::<_, String>(4)?))
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            raw,
+            r.get::<_, String>(4)?,
+        ))
     })?;
     let mut out = Vec::new();
     for row in rows {
         let (id, actor, action, raw, at) = row?;
-        out.push(AuditEntry { id, actor, action, detail: serde_json::from_str(&raw)?, at });
+        out.push(AuditEntry {
+            id,
+            actor,
+            action,
+            detail: serde_json::from_str(&raw)?,
+            at,
+        });
     }
     Ok(out)
 }

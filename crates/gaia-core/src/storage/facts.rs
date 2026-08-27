@@ -10,9 +10,18 @@ use super::{StorageError, like_pattern, parse_db_enum, required, targets};
 
 const COLS: &str = "f.id, f.entity_type, f.entity_id, f.statement, f.predicate, f.value, f.kind, f.scope, f.valid_from, f.superseded_by, f.created_at";
 
-pub fn insert(conn: &Connection, patch: &FactPatch, kind: Kind, scope: &str) -> Result<i64, StorageError> {
-    let entity_type = patch.entity_type.ok_or_else(|| StorageError::Integrity("fact.entity_type is required".into()))?;
-    let entity_id = patch.entity_id.ok_or_else(|| StorageError::Integrity("fact.entity_id is required".into()))?;
+pub fn insert(
+    conn: &Connection,
+    patch: &FactPatch,
+    kind: Kind,
+    scope: &str,
+) -> Result<i64, StorageError> {
+    let entity_type = patch
+        .entity_type
+        .ok_or_else(|| StorageError::Integrity("fact.entity_type is required".into()))?;
+    let entity_id = patch
+        .entity_id
+        .ok_or_else(|| StorageError::Integrity("fact.entity_id is required".into()))?;
     let statement = required(patch.statement.as_deref(), "fact.statement")?;
     targets::ensure(conn, &entity_type.to_string(), entity_id)?;
     conn.execute(
@@ -33,20 +42,38 @@ pub fn insert(conn: &Connection, patch: &FactPatch, kind: Kind, scope: &str) -> 
 }
 
 /// 旧 fact を新 fact で置き換える（superseded_by リンク）。旧 fact は同じ scope 内・未置換であること。
-pub fn supersede(conn: &Connection, old_id: i64, patch: &FactPatch, kind: Kind, scope: &str) -> Result<i64, StorageError> {
+pub fn supersede(
+    conn: &Connection,
+    old_id: i64,
+    patch: &FactPatch,
+    kind: Kind,
+    scope: &str,
+) -> Result<i64, StorageError> {
     let old = get(conn, old_id, &ScopeSet::single(scope))?
         .ok_or_else(|| StorageError::NotFound(format!("fact {old_id} (in scope `{scope}`)")))?;
     if let Some(by) = old.superseded_by {
-        return Err(StorageError::Integrity(format!("fact {old_id} is already superseded by {by}")));
+        return Err(StorageError::Integrity(format!(
+            "fact {old_id} is already superseded by {by}"
+        )));
     }
     let new_id = insert(conn, patch, kind, scope)?;
-    conn.execute("UPDATE facts SET superseded_by = ?2 WHERE id = ?1", params![old_id, new_id])?;
+    conn.execute(
+        "UPDATE facts SET superseded_by = ?2 WHERE id = ?1",
+        params![old_id, new_id],
+    )?;
     Ok(new_id)
 }
 
-pub fn update(conn: &Connection, id: i64, patch: &FactPatch, scope: &str) -> Result<(), StorageError> {
+pub fn update(
+    conn: &Connection,
+    id: i64,
+    patch: &FactPatch,
+    scope: &str,
+) -> Result<(), StorageError> {
     if get(conn, id, &ScopeSet::single(scope))?.is_none() {
-        return Err(StorageError::NotFound(format!("fact {id} (in scope `{scope}`)")));
+        return Err(StorageError::NotFound(format!(
+            "fact {id} (in scope `{scope}`)"
+        )));
     }
     conn.execute(
         "UPDATE facts SET statement = COALESCE(?2, statement), predicate = COALESCE(?3, predicate), \
@@ -68,17 +95,33 @@ pub fn get(conn: &Connection, id: i64, scopes: &ScopeSet) -> Result<Option<Fact>
 }
 
 /// エンティティに付く現在の facts（新しい順）。
-pub fn for_entity(conn: &Connection, entity_type: &str, entity_id: i64, scopes: &ScopeSet, limit: usize) -> Result<Vec<Fact>, StorageError> {
+pub fn for_entity(
+    conn: &Connection,
+    entity_type: &str,
+    entity_id: i64,
+    scopes: &ScopeSet,
+    limit: usize,
+) -> Result<Vec<Fact>, StorageError> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {COLS} FROM facts f WHERE f.entity_type = ?1 AND f.entity_id = ?2 AND f.superseded_by IS NULL \
          AND f.scope IN (SELECT value FROM json_each(?3)) ORDER BY f.id DESC LIMIT ?4"
     ))?;
-    let raws: Vec<RawFact> = stmt.query_map(params![entity_type, entity_id, scopes.as_json(), limit as i64], raw_row)?.collect::<Result<_, _>>()?;
+    let raws: Vec<RawFact> = stmt
+        .query_map(
+            params![entity_type, entity_id, scopes.as_json(), limit as i64],
+            raw_row,
+        )?
+        .collect::<Result<_, _>>()?;
     raws.into_iter().map(convert).collect()
 }
 
 /// 全文検索。3 文字（Unicode 文字数）以上は trigram FTS を bm25 順で、未満は LIKE。
-pub fn search(conn: &Connection, query: &str, scopes: &ScopeSet, limit: usize) -> Result<Vec<Fact>, StorageError> {
+pub fn search(
+    conn: &Connection,
+    query: &str,
+    scopes: &ScopeSet,
+    limit: usize,
+) -> Result<Vec<Fact>, StorageError> {
     if query.chars().count() >= 3 {
         let match_expr = format!("\"{}\"", query.replace('"', "\"\""));
         let mut stmt = conn.prepare(&format!(
@@ -87,28 +130,69 @@ pub fn search(conn: &Connection, query: &str, scopes: &ScopeSet, limit: usize) -
              WHERE f.superseded_by IS NULL AND f.scope IN (SELECT value FROM json_each(?2)) \
              ORDER BY m.rank LIMIT ?3"
         ))?;
-        let raws: Vec<RawFact> = stmt.query_map(params![match_expr, scopes.as_json(), limit as i64], raw_row)?.collect::<Result<_, _>>()?;
+        let raws: Vec<RawFact> = stmt
+            .query_map(params![match_expr, scopes.as_json(), limit as i64], raw_row)?
+            .collect::<Result<_, _>>()?;
         raws.into_iter().map(convert).collect()
     } else {
         let mut stmt = conn.prepare(&format!(
             "SELECT {COLS} FROM facts f WHERE f.statement LIKE ?1 ESCAPE '\\' AND f.superseded_by IS NULL \
              AND f.scope IN (SELECT value FROM json_each(?2)) ORDER BY f.id DESC LIMIT ?3"
         ))?;
-        let raws: Vec<RawFact> = stmt.query_map(params![like_pattern(query), scopes.as_json(), limit as i64], raw_row)?.collect::<Result<_, _>>()?;
+        let raws: Vec<RawFact> = stmt
+            .query_map(
+                params![like_pattern(query), scopes.as_json(), limit as i64],
+                raw_row,
+            )?
+            .collect::<Result<_, _>>()?;
         raws.into_iter().map(convert).collect()
     }
 }
 
-type RawFact = (i64, String, i64, String, Option<String>, Option<String>, String, String, Option<String>, Option<i64>, String);
+type RawFact = (
+    i64,
+    String,
+    i64,
+    String,
+    Option<String>,
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+    Option<i64>,
+    String,
+);
 
 fn raw_row(r: &Row<'_>) -> rusqlite::Result<RawFact> {
     Ok((
-        r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?,
+        r.get(0)?,
+        r.get(1)?,
+        r.get(2)?,
+        r.get(3)?,
+        r.get(4)?,
+        r.get(5)?,
+        r.get(6)?,
+        r.get(7)?,
+        r.get(8)?,
+        r.get(9)?,
+        r.get(10)?,
     ))
 }
 
 fn convert(raw: RawFact) -> Result<Fact, StorageError> {
-    let (id, entity_type, entity_id, statement, predicate, value, kind, scope, valid_from, superseded_by, created_at) = raw;
+    let (
+        id,
+        entity_type,
+        entity_id,
+        statement,
+        predicate,
+        value,
+        kind,
+        scope,
+        valid_from,
+        superseded_by,
+        created_at,
+    ) = raw;
     Ok(Fact {
         id,
         entity_type: parse_db_enum(&entity_type, "fact entity_type")?,
@@ -127,14 +211,20 @@ fn convert(raw: RawFact) -> Result<Fact, StorageError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{contracts::types::PersonPatch, storage::{Db, affiliations, people}};
+    use crate::{
+        contracts::types::PersonPatch,
+        storage::{Db, affiliations, people},
+    };
     use serde_json::json;
 
     fn fixture(db: &Db) -> i64 {
         db.with_conn::<_, StorageError>(|c| {
             affiliations::insert(c, "cn", None)?;
             affiliations::insert(c, "other", None)?;
-            people::insert(c, &serde_json::from_value::<PersonPatch>(json!({"name": "岡村"})).unwrap())
+            people::insert(
+                c,
+                &serde_json::from_value::<PersonPatch>(json!({"name": "岡村"})).unwrap(),
+            )
         })
         .unwrap()
     }

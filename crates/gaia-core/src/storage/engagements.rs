@@ -11,7 +11,11 @@ use super::{StorageError, like_pattern, organizations, people, required};
 const COLS: &str = "e.id, e.name, e.org_id, o.name, e.scope, e.status, e.started_at, e.ended_at";
 const FROM: &str = "FROM engagements e LEFT JOIN organizations o ON o.id = e.org_id";
 
-pub fn insert(conn: &Connection, patch: &EngagementPatch, scope: &str) -> Result<i64, StorageError> {
+pub fn insert(
+    conn: &Connection,
+    patch: &EngagementPatch,
+    scope: &str,
+) -> Result<i64, StorageError> {
     let name = required(patch.name.as_deref(), "engagement.name")?;
     if let Some(org_id) = patch.org_id {
         organizations::ensure(conn, org_id)?;
@@ -27,7 +31,12 @@ pub fn insert(conn: &Connection, patch: &EngagementPatch, scope: &str) -> Result
     Ok(id)
 }
 
-pub fn update(conn: &Connection, id: i64, patch: &EngagementPatch, scope: &str) -> Result<(), StorageError> {
+pub fn update(
+    conn: &Connection,
+    id: i64,
+    patch: &EngagementPatch,
+    scope: &str,
+) -> Result<(), StorageError> {
     ensure_in_scope(conn, id, scope)?;
     if let Some(org_id) = patch.org_id {
         organizations::ensure(conn, org_id)?;
@@ -45,12 +54,19 @@ pub fn update(conn: &Connection, id: i64, patch: &EngagementPatch, scope: &str) 
 
 fn ensure_in_scope(conn: &Connection, id: i64, scope: &str) -> Result<(), StorageError> {
     if get(conn, id, &ScopeSet::single(scope))?.is_none() {
-        return Err(StorageError::NotFound(format!("engagement {id} (in scope `{scope}`)")));
+        return Err(StorageError::NotFound(format!(
+            "engagement {id} (in scope `{scope}`)"
+        )));
     }
     Ok(())
 }
 
-pub fn add_person(conn: &Connection, engagement_id: i64, person_id: i64, role: Option<&str>) -> Result<(), StorageError> {
+pub fn add_person(
+    conn: &Connection,
+    engagement_id: i64,
+    person_id: i64,
+    role: Option<&str>,
+) -> Result<(), StorageError> {
     people::ensure(conn, person_id)?;
     conn.execute(
         "INSERT INTO engagement_people(engagement_id, person_id, role) VALUES (?1, ?2, ?3) \
@@ -60,7 +76,11 @@ pub fn add_person(conn: &Connection, engagement_id: i64, person_id: i64, role: O
     Ok(())
 }
 
-pub fn get(conn: &Connection, id: i64, scopes: &ScopeSet) -> Result<Option<EngagementSummary>, StorageError> {
+pub fn get(
+    conn: &Connection,
+    id: i64,
+    scopes: &ScopeSet,
+) -> Result<Option<EngagementSummary>, StorageError> {
     Ok(conn
         .query_row(
             &format!("SELECT {COLS} {FROM} WHERE e.id = ?1 AND e.scope IN (SELECT value FROM json_each(?2))"),
@@ -70,7 +90,11 @@ pub fn get(conn: &Connection, id: i64, scopes: &ScopeSet) -> Result<Option<Engag
         .optional()?)
 }
 
-pub fn find_by_name(conn: &Connection, name: &str, scopes: &ScopeSet) -> Result<Vec<EngagementSummary>, StorageError> {
+pub fn find_by_name(
+    conn: &Connection,
+    name: &str,
+    scopes: &ScopeSet,
+) -> Result<Vec<EngagementSummary>, StorageError> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {COLS} {FROM} WHERE e.name = ?1 AND e.scope IN (SELECT value FROM json_each(?2)) ORDER BY e.id"
     ))?;
@@ -79,11 +103,16 @@ pub fn find_by_name(conn: &Connection, name: &str, scopes: &ScopeSet) -> Result<
 }
 
 /// 案件の関係者（PersonSummary ＋ 役割）。
-pub fn members(conn: &Connection, engagement_id: i64) -> Result<Vec<EngagementPerson>, StorageError> {
-    let mut stmt =
-        conn.prepare("SELECT person_id, role FROM engagement_people WHERE engagement_id = ?1 ORDER BY person_id")?;
-    let pairs: Vec<(i64, Option<String>)> =
-        stmt.query_map(params![engagement_id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+pub fn members(
+    conn: &Connection,
+    engagement_id: i64,
+) -> Result<Vec<EngagementPerson>, StorageError> {
+    let mut stmt = conn.prepare(
+        "SELECT person_id, role FROM engagement_people WHERE engagement_id = ?1 ORDER BY person_id",
+    )?;
+    let pairs: Vec<(i64, Option<String>)> = stmt
+        .query_map(params![engagement_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
     let mut out = Vec::with_capacity(pairs.len());
     for (pid, role) in pairs {
         if let Some(person) = people::get(conn, pid)? {
@@ -94,11 +123,19 @@ pub fn members(conn: &Connection, engagement_id: i64) -> Result<Vec<EngagementPe
 }
 
 pub fn member_ids(conn: &Connection, engagement_id: i64) -> Result<Vec<i64>, StorageError> {
-    let mut stmt = conn.prepare("SELECT person_id FROM engagement_people WHERE engagement_id = ?1 ORDER BY person_id")?;
-    Ok(stmt.query_map(params![engagement_id], |r| r.get(0))?.collect::<Result<_, _>>()?)
+    let mut stmt = conn.prepare(
+        "SELECT person_id FROM engagement_people WHERE engagement_id = ?1 ORDER BY person_id",
+    )?;
+    Ok(stmt
+        .query_map(params![engagement_id], |r| r.get(0))?
+        .collect::<Result<_, _>>()?)
 }
 
-pub fn for_person(conn: &Connection, person_id: i64, scopes: &ScopeSet) -> Result<Vec<EngagementSummary>, StorageError> {
+pub fn for_person(
+    conn: &Connection,
+    person_id: i64,
+    scopes: &ScopeSet,
+) -> Result<Vec<EngagementSummary>, StorageError> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {COLS} {FROM} JOIN engagement_people ep ON ep.engagement_id = e.id \
          WHERE ep.person_id = ?1 AND e.scope IN (SELECT value FROM json_each(?2)) ORDER BY e.id"
@@ -107,7 +144,11 @@ pub fn for_person(conn: &Connection, person_id: i64, scopes: &ScopeSet) -> Resul
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-pub fn for_org(conn: &Connection, org_id: i64, scopes: &ScopeSet) -> Result<Vec<EngagementSummary>, StorageError> {
+pub fn for_org(
+    conn: &Connection,
+    org_id: i64,
+    scopes: &ScopeSet,
+) -> Result<Vec<EngagementSummary>, StorageError> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {COLS} {FROM} WHERE e.org_id = ?1 AND e.scope IN (SELECT value FROM json_each(?2)) ORDER BY e.id"
     ))?;
@@ -115,12 +156,20 @@ pub fn for_org(conn: &Connection, org_id: i64, scopes: &ScopeSet) -> Result<Vec<
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-pub fn search_like(conn: &Connection, needle: &str, scopes: &ScopeSet, limit: usize) -> Result<Vec<EngagementSummary>, StorageError> {
+pub fn search_like(
+    conn: &Connection,
+    needle: &str,
+    scopes: &ScopeSet,
+    limit: usize,
+) -> Result<Vec<EngagementSummary>, StorageError> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {COLS} {FROM} WHERE e.name LIKE ?1 ESCAPE '\\' AND e.scope IN (SELECT value FROM json_each(?2)) \
          ORDER BY e.name LIMIT ?3"
     ))?;
-    let rows = stmt.query_map(params![like_pattern(needle), scopes.as_json(), limit as i64], row)?;
+    let rows = stmt.query_map(
+        params![like_pattern(needle), scopes.as_json(), limit as i64],
+        row,
+    )?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
@@ -140,7 +189,10 @@ fn row(r: &Row<'_>) -> rusqlite::Result<EngagementSummary> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{contracts::types::PersonPatch, storage::{Db, affiliations}};
+    use crate::{
+        contracts::types::PersonPatch,
+        storage::{Db, affiliations},
+    };
     use serde_json::json;
 
     #[test]

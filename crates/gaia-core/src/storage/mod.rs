@@ -93,15 +93,15 @@ impl Db {
 
 pub mod affiliations;
 pub mod audit;
+pub mod engagements;
 pub mod entities;
+pub mod facts;
+pub mod glossary;
+pub mod interactions;
 pub mod organizations;
 pub mod people;
-pub mod targets;
-pub mod engagements;
-pub mod interactions;
-pub mod facts;
 pub mod refs;
-pub mod glossary;
+pub mod targets;
 
 /// insert 時の必須文字列。trim して空なら Integrity エラー。
 pub(crate) fn required<'a>(value: Option<&'a str>, what: &str) -> Result<&'a str, StorageError> {
@@ -117,7 +117,8 @@ where
     T: std::str::FromStr,
     T::Err: std::fmt::Display,
 {
-    raw.parse().map_err(|e: T::Err| StorageError::Integrity(format!("invalid {what} `{raw}` in db: {e}")))
+    raw.parse()
+        .map_err(|e: T::Err| StorageError::Integrity(format!("invalid {what} `{raw}` in db: {e}")))
 }
 
 fn configure(conn: &mut Connection) -> Result<(), StorageError> {

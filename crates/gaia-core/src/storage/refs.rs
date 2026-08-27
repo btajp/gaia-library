@@ -11,8 +11,12 @@ use super::{StorageError, parse_db_enum, required, targets};
 const COLS: &str = "id, target_type, target_id, system, uri, title, note, snapshot, scope, last_verified, created_at";
 
 pub fn insert(conn: &Connection, patch: &RefPatch, scope: &str) -> Result<i64, StorageError> {
-    let target_type = patch.target_type.ok_or_else(|| StorageError::Integrity("ref.target_type is required".into()))?;
-    let target_id = patch.target_id.ok_or_else(|| StorageError::Integrity("ref.target_id is required".into()))?;
+    let target_type = patch
+        .target_type
+        .ok_or_else(|| StorageError::Integrity("ref.target_type is required".into()))?;
+    let target_id = patch
+        .target_id
+        .ok_or_else(|| StorageError::Integrity("ref.target_id is required".into()))?;
     let system = required(patch.system.as_deref(), "ref.system")?;
     let uri = required(patch.uri.as_deref(), "ref.uri")?;
     let note = required(patch.note.as_deref(), "ref.note")?;
@@ -36,9 +40,16 @@ pub fn insert(conn: &Connection, patch: &RefPatch, scope: &str) -> Result<i64, S
 }
 
 /// 紐付け先（target_type / target_id）は変更不可。内容だけ更新する。
-pub fn update(conn: &Connection, id: i64, patch: &RefPatch, scope: &str) -> Result<(), StorageError> {
+pub fn update(
+    conn: &Connection,
+    id: i64,
+    patch: &RefPatch,
+    scope: &str,
+) -> Result<(), StorageError> {
     if get(conn, id, &ScopeSet::single(scope))?.is_none() {
-        return Err(StorageError::NotFound(format!("ref {id} (in scope `{scope}`)")));
+        return Err(StorageError::NotFound(format!(
+            "ref {id} (in scope `{scope}`)"
+        )));
     }
     conn.execute(
         "UPDATE refs SET system = COALESCE(?2, system), uri = COALESCE(?3, uri), title = COALESCE(?4, title), \
@@ -48,7 +59,11 @@ pub fn update(conn: &Connection, id: i64, patch: &RefPatch, scope: &str) -> Resu
     Ok(())
 }
 
-pub fn get(conn: &Connection, id: i64, scopes: &ScopeSet) -> Result<Option<Reference>, StorageError> {
+pub fn get(
+    conn: &Connection,
+    id: i64,
+    scopes: &ScopeSet,
+) -> Result<Option<Reference>, StorageError> {
     let raw = conn
         .query_row(
             &format!("SELECT {COLS} FROM refs WHERE id = ?1 AND scope IN (SELECT value FROM json_each(?2))"),
@@ -59,24 +74,65 @@ pub fn get(conn: &Connection, id: i64, scopes: &ScopeSet) -> Result<Option<Refer
     raw.map(convert).transpose()
 }
 
-pub fn for_target(conn: &Connection, target_type: &str, target_id: i64, scopes: &ScopeSet) -> Result<Vec<Reference>, StorageError> {
+pub fn for_target(
+    conn: &Connection,
+    target_type: &str,
+    target_id: i64,
+    scopes: &ScopeSet,
+) -> Result<Vec<Reference>, StorageError> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {COLS} FROM refs WHERE target_type = ?1 AND target_id = ?2 AND scope IN (SELECT value FROM json_each(?3)) ORDER BY id"
     ))?;
-    let raws: Vec<RawRef> = stmt.query_map(params![target_type, target_id, scopes.as_json()], raw_row)?.collect::<Result<_, _>>()?;
+    let raws: Vec<RawRef> = stmt
+        .query_map(params![target_type, target_id, scopes.as_json()], raw_row)?
+        .collect::<Result<_, _>>()?;
     raws.into_iter().map(convert).collect()
 }
 
-type RawRef = (i64, String, i64, String, String, Option<String>, String, Option<String>, String, Option<String>, String);
+type RawRef = (
+    i64,
+    String,
+    i64,
+    String,
+    String,
+    Option<String>,
+    String,
+    Option<String>,
+    String,
+    Option<String>,
+    String,
+);
 
 fn raw_row(r: &Row<'_>) -> rusqlite::Result<RawRef> {
     Ok((
-        r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?,
+        r.get(0)?,
+        r.get(1)?,
+        r.get(2)?,
+        r.get(3)?,
+        r.get(4)?,
+        r.get(5)?,
+        r.get(6)?,
+        r.get(7)?,
+        r.get(8)?,
+        r.get(9)?,
+        r.get(10)?,
     ))
 }
 
 fn convert(raw: RawRef) -> Result<Reference, StorageError> {
-    let (id, target_type, target_id, system, uri, title, note, snapshot, scope, last_verified, created_at) = raw;
+    let (
+        id,
+        target_type,
+        target_id,
+        system,
+        uri,
+        title,
+        note,
+        snapshot,
+        scope,
+        last_verified,
+        created_at,
+    ) = raw;
     Ok(Reference {
         id,
         target_type: parse_db_enum(&target_type, "ref target_type")?,
@@ -95,7 +151,10 @@ fn convert(raw: RawRef) -> Result<Reference, StorageError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{contracts::types::{FactPatch, Kind, PersonPatch}, storage::{Db, affiliations, facts, people}};
+    use crate::{
+        contracts::types::{FactPatch, Kind, PersonPatch},
+        storage::{Db, affiliations, facts, people},
+    };
     use serde_json::json;
 
     #[test]

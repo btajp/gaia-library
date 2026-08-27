@@ -10,7 +10,11 @@ use super::{StorageError, engagements, like_pattern, people, required};
 
 const COLS: &str = "i.id, i.kind, i.occurred_at, i.summary, i.engagement_id, i.scope";
 
-pub fn insert(conn: &Connection, patch: &InteractionPatch, scope: &str) -> Result<i64, StorageError> {
+pub fn insert(
+    conn: &Connection,
+    patch: &InteractionPatch,
+    scope: &str,
+) -> Result<i64, StorageError> {
     let kind = required(patch.kind.as_deref(), "interaction.kind")?;
     let occurred_at = required(patch.occurred_at.as_deref(), "interaction.occurred_at")?;
     let summary = required(patch.summary.as_deref(), "interaction.summary")?;
@@ -27,9 +31,16 @@ pub fn insert(conn: &Connection, patch: &InteractionPatch, scope: &str) -> Resul
     Ok(id)
 }
 
-pub fn update(conn: &Connection, id: i64, patch: &InteractionPatch, scope: &str) -> Result<(), StorageError> {
+pub fn update(
+    conn: &Connection,
+    id: i64,
+    patch: &InteractionPatch,
+    scope: &str,
+) -> Result<(), StorageError> {
     if get(conn, id, &ScopeSet::single(scope))?.is_none() {
-        return Err(StorageError::NotFound(format!("interaction {id} (in scope `{scope}`)")));
+        return Err(StorageError::NotFound(format!(
+            "interaction {id} (in scope `{scope}`)"
+        )));
     }
     ensure_engagement_in_scope(conn, patch.engagement_id, scope)?;
     for pid in &patch.person_ids {
@@ -44,16 +55,26 @@ pub fn update(conn: &Connection, id: i64, patch: &InteractionPatch, scope: &str)
     Ok(())
 }
 
-fn ensure_engagement_in_scope(conn: &Connection, engagement_id: Option<i64>, scope: &str) -> Result<(), StorageError> {
-    if let Some(eid) = engagement_id {
-        if engagements::get(conn, eid, &ScopeSet::single(scope))?.is_none() {
-            return Err(StorageError::NotFound(format!("engagement {eid} (in scope `{scope}`)")));
-        }
+fn ensure_engagement_in_scope(
+    conn: &Connection,
+    engagement_id: Option<i64>,
+    scope: &str,
+) -> Result<(), StorageError> {
+    if let Some(eid) = engagement_id
+        && engagements::get(conn, eid, &ScopeSet::single(scope))?.is_none()
+    {
+        return Err(StorageError::NotFound(format!(
+            "engagement {eid} (in scope `{scope}`)"
+        )));
     }
     Ok(())
 }
 
-fn link_people(conn: &Connection, interaction_id: i64, person_ids: &[i64]) -> Result<(), StorageError> {
+fn link_people(
+    conn: &Connection,
+    interaction_id: i64,
+    person_ids: &[i64],
+) -> Result<(), StorageError> {
     for pid in person_ids {
         conn.execute(
             "INSERT INTO interaction_people(interaction_id, person_id) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
@@ -63,7 +84,11 @@ fn link_people(conn: &Connection, interaction_id: i64, person_ids: &[i64]) -> Re
     Ok(())
 }
 
-pub fn get(conn: &Connection, id: i64, scopes: &ScopeSet) -> Result<Option<InteractionSummary>, StorageError> {
+pub fn get(
+    conn: &Connection,
+    id: i64,
+    scopes: &ScopeSet,
+) -> Result<Option<InteractionSummary>, StorageError> {
     let base = conn
         .query_row(
             &format!("SELECT {COLS} FROM interactions i WHERE i.id = ?1 AND i.scope IN (SELECT value FROM json_each(?2))"),
@@ -74,38 +99,69 @@ pub fn get(conn: &Connection, id: i64, scopes: &ScopeSet) -> Result<Option<Inter
     fill_people(conn, base.into_iter().collect()).map(|mut v| v.pop())
 }
 
-pub fn recent_for_person(conn: &Connection, person_id: i64, scopes: &ScopeSet, limit: usize) -> Result<Vec<InteractionSummary>, StorageError> {
+pub fn recent_for_person(
+    conn: &Connection,
+    person_id: i64,
+    scopes: &ScopeSet,
+    limit: usize,
+) -> Result<Vec<InteractionSummary>, StorageError> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {COLS} FROM interactions i JOIN interaction_people ip ON ip.interaction_id = i.id \
          WHERE ip.person_id = ?1 AND i.scope IN (SELECT value FROM json_each(?2)) \
          ORDER BY i.occurred_at DESC LIMIT ?3"
     ))?;
-    let rows: Vec<InteractionSummary> = stmt.query_map(params![person_id, scopes.as_json(), limit as i64], row)?.collect::<Result<_, _>>()?;
+    let rows: Vec<InteractionSummary> = stmt
+        .query_map(params![person_id, scopes.as_json(), limit as i64], row)?
+        .collect::<Result<_, _>>()?;
     fill_people(conn, rows)
 }
 
-pub fn recent_for_engagement(conn: &Connection, engagement_id: i64, scopes: &ScopeSet, limit: usize) -> Result<Vec<InteractionSummary>, StorageError> {
+pub fn recent_for_engagement(
+    conn: &Connection,
+    engagement_id: i64,
+    scopes: &ScopeSet,
+    limit: usize,
+) -> Result<Vec<InteractionSummary>, StorageError> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {COLS} FROM interactions i WHERE i.engagement_id = ?1 AND i.scope IN (SELECT value FROM json_each(?2)) \
          ORDER BY i.occurred_at DESC LIMIT ?3"
     ))?;
-    let rows: Vec<InteractionSummary> = stmt.query_map(params![engagement_id, scopes.as_json(), limit as i64], row)?.collect::<Result<_, _>>()?;
+    let rows: Vec<InteractionSummary> = stmt
+        .query_map(params![engagement_id, scopes.as_json(), limit as i64], row)?
+        .collect::<Result<_, _>>()?;
     fill_people(conn, rows)
 }
 
-pub fn search_like(conn: &Connection, needle: &str, scopes: &ScopeSet, limit: usize) -> Result<Vec<InteractionSummary>, StorageError> {
+pub fn search_like(
+    conn: &Connection,
+    needle: &str,
+    scopes: &ScopeSet,
+    limit: usize,
+) -> Result<Vec<InteractionSummary>, StorageError> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {COLS} FROM interactions i WHERE i.summary LIKE ?1 ESCAPE '\\' AND i.scope IN (SELECT value FROM json_each(?2)) \
          ORDER BY i.occurred_at DESC LIMIT ?3"
     ))?;
-    let rows: Vec<InteractionSummary> = stmt.query_map(params![like_pattern(needle), scopes.as_json(), limit as i64], row)?.collect::<Result<_, _>>()?;
+    let rows: Vec<InteractionSummary> = stmt
+        .query_map(
+            params![like_pattern(needle), scopes.as_json(), limit as i64],
+            row,
+        )?
+        .collect::<Result<_, _>>()?;
     fill_people(conn, rows)
 }
 
-fn fill_people(conn: &Connection, mut rows: Vec<InteractionSummary>) -> Result<Vec<InteractionSummary>, StorageError> {
-    let mut stmt = conn.prepare("SELECT person_id FROM interaction_people WHERE interaction_id = ?1 ORDER BY person_id")?;
+fn fill_people(
+    conn: &Connection,
+    mut rows: Vec<InteractionSummary>,
+) -> Result<Vec<InteractionSummary>, StorageError> {
+    let mut stmt = conn.prepare(
+        "SELECT person_id FROM interaction_people WHERE interaction_id = ?1 ORDER BY person_id",
+    )?;
     for r in &mut rows {
-        r.person_ids = stmt.query_map(params![r.id], |x| x.get(0))?.collect::<Result<_, _>>()?;
+        r.person_ids = stmt
+            .query_map(params![r.id], |x| x.get(0))?
+            .collect::<Result<_, _>>()?;
     }
     Ok(rows)
 }
@@ -125,7 +181,10 @@ fn row(r: &Row<'_>) -> rusqlite::Result<InteractionSummary> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{contracts::types::PersonPatch, storage::{Db, affiliations}};
+    use crate::{
+        contracts::types::PersonPatch,
+        storage::{Db, affiliations},
+    };
     use serde_json::json;
 
     #[test]

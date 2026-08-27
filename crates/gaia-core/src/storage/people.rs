@@ -15,7 +15,13 @@ pub fn insert(conn: &Connection, patch: &PersonPatch) -> Result<i64, StorageErro
     }
     conn.execute(
         "INSERT INTO people(name, org_id, role, first_met, last_seen) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![name, patch.org_id, patch.role, patch.first_met, patch.last_seen],
+        params![
+            name,
+            patch.org_id,
+            patch.role,
+            patch.first_met,
+            patch.last_seen
+        ],
     )?;
     let id = conn.last_insert_rowid();
     add_alias(conn, id, name, Some("name"))?;
@@ -45,7 +51,12 @@ pub fn update(conn: &Connection, id: i64, patch: &PersonPatch) -> Result<(), Sto
 }
 
 /// 生の alias と、その正規化形（kind='normalized'）を登録する。既存行は上書きしない。
-pub fn add_alias(conn: &Connection, person_id: i64, alias: &str, kind: Option<&str>) -> Result<(), StorageError> {
+pub fn add_alias(
+    conn: &Connection,
+    person_id: i64,
+    alias: &str,
+    kind: Option<&str>,
+) -> Result<(), StorageError> {
     let alias = alias.trim();
     if alias.is_empty() {
         return Err(StorageError::Integrity("alias is required".into()));
@@ -94,7 +105,12 @@ pub fn aliases(conn: &Connection, person_id: i64) -> Result<Vec<Alias>, StorageE
     let mut stmt = conn.prepare(
         "SELECT alias, kind FROM person_aliases WHERE person_id = ?1 AND (kind IS NULL OR kind <> 'normalized') ORDER BY alias",
     )?;
-    let rows = stmt.query_map(params![person_id], |r| Ok(Alias { alias: r.get(0)?, kind: r.get(1)? }))?;
+    let rows = stmt.query_map(params![person_id], |r| {
+        Ok(Alias {
+            alias: r.get(0)?,
+            kind: r.get(1)?,
+        })
+    })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
@@ -105,18 +121,31 @@ pub fn find_by_name(conn: &Connection, name: &str) -> Result<Vec<PersonSummary>,
         "SELECT DISTINCT p.id FROM people p LEFT JOIN person_aliases a ON a.person_id = p.id \
          WHERE p.name = ?1 OR a.alias = ?1 OR a.alias = ?2 ORDER BY p.id",
     )?;
-    let ids: Vec<i64> = stmt.query_map(params![name, normalized], |r| r.get(0))?.collect::<Result<_, _>>()?;
+    let ids: Vec<i64> = stmt
+        .query_map(params![name, normalized], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
     load_many(conn, &ids)
 }
 
 /// 正規化済み表示名の完全一致（resolve_speakers の第一経路）。
-pub fn find_by_alias_normalized(conn: &Connection, normalized: &str) -> Result<Vec<PersonSummary>, StorageError> {
-    let mut stmt = conn.prepare("SELECT DISTINCT person_id FROM person_aliases WHERE alias = ?1 ORDER BY person_id")?;
-    let ids: Vec<i64> = stmt.query_map(params![normalized], |r| r.get(0))?.collect::<Result<_, _>>()?;
+pub fn find_by_alias_normalized(
+    conn: &Connection,
+    normalized: &str,
+) -> Result<Vec<PersonSummary>, StorageError> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT person_id FROM person_aliases WHERE alias = ?1 ORDER BY person_id",
+    )?;
+    let ids: Vec<i64> = stmt
+        .query_map(params![normalized], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
     load_many(conn, &ids)
 }
 
-pub fn search_like(conn: &Connection, needle: &str, limit: usize) -> Result<Vec<PersonSummary>, StorageError> {
+pub fn search_like(
+    conn: &Connection,
+    needle: &str,
+    limit: usize,
+) -> Result<Vec<PersonSummary>, StorageError> {
     let raw = like_pattern(needle);
     let norm = like_pattern(&normalize_name(needle));
     let mut stmt = conn.prepare(
@@ -124,13 +153,17 @@ pub fn search_like(conn: &Connection, needle: &str, limit: usize) -> Result<Vec<
          WHERE p.name LIKE ?1 ESCAPE '\\' OR a.alias LIKE ?1 ESCAPE '\\' OR a.alias LIKE ?2 ESCAPE '\\' \
          ORDER BY p.id LIMIT ?3",
     )?;
-    let ids: Vec<i64> = stmt.query_map(params![raw, norm, limit as i64], |r| r.get(0))?.collect::<Result<_, _>>()?;
+    let ids: Vec<i64> = stmt
+        .query_map(params![raw, norm, limit as i64], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
     load_many(conn, &ids)
 }
 
 pub fn list_by_org(conn: &Connection, org_id: i64) -> Result<Vec<PersonSummary>, StorageError> {
     let mut stmt = conn.prepare("SELECT id FROM people WHERE org_id = ?1 ORDER BY name")?;
-    let ids: Vec<i64> = stmt.query_map(params![org_id], |r| r.get(0))?.collect::<Result<_, _>>()?;
+    let ids: Vec<i64> = stmt
+        .query_map(params![org_id], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
     load_many(conn, &ids)
 }
 
@@ -167,7 +200,11 @@ mod tests {
     fn insert_registers_normalized_aliases_and_lookup_works() {
         let db = Db::open_in_memory().unwrap();
         db.with_conn::<_, StorageError>(|c| {
-            let org = organizations::insert(c, &serde_json::from_value::<OrganizationPatch>(json!({"name": "CloudNative"})).unwrap())?;
+            let org = organizations::insert(
+                c,
+                &serde_json::from_value::<OrganizationPatch>(json!({"name": "CloudNative"}))
+                    .unwrap(),
+            )?;
             let p: PersonPatch = serde_json::from_value(json!({
                 "name": "岡村 慎太郎", "org_id": org, "role": "CTO",
                 "aliases": [{"alias": "Okamura Shintaro", "kind": "romaji"}]
@@ -187,7 +224,13 @@ mod tests {
             // 部分一致
             assert_eq!(search_like(c, "岡村", 10)?.len(), 1);
             // name 無しの insert は拒否
-            assert!(matches!(insert(c, &serde_json::from_value::<PersonPatch>(json!({})).unwrap()), Err(StorageError::Integrity(_))));
+            assert!(matches!(
+                insert(
+                    c,
+                    &serde_json::from_value::<PersonPatch>(json!({})).unwrap()
+                ),
+                Err(StorageError::Integrity(_))
+            ));
             Ok(())
         })
         .unwrap();
@@ -197,13 +240,30 @@ mod tests {
     fn update_coalesces_and_adds_aliases() {
         let db = Db::open_in_memory().unwrap();
         db.with_conn::<_, StorageError>(|c| {
-            let id = insert(c, &serde_json::from_value::<PersonPatch>(json!({"name": "田中 太郎"})).unwrap())?;
-            update(c, id, &serde_json::from_value::<PersonPatch>(json!({"role": "PM", "aliases": [{"alias": "tanaka"}]})).unwrap())?;
+            let id = insert(
+                c,
+                &serde_json::from_value::<PersonPatch>(json!({"name": "田中 太郎"})).unwrap(),
+            )?;
+            update(
+                c,
+                id,
+                &serde_json::from_value::<PersonPatch>(
+                    json!({"role": "PM", "aliases": [{"alias": "tanaka"}]}),
+                )
+                .unwrap(),
+            )?;
             let got = get(c, id)?.unwrap();
             assert_eq!(got.name, "田中 太郎");
             assert_eq!(got.role.as_deref(), Some("PM"));
             assert_eq!(find_by_alias_normalized(c, "tanaka")?.len(), 1);
-            assert!(matches!(update(c, 999, &serde_json::from_value::<PersonPatch>(json!({})).unwrap()), Err(StorageError::NotFound(_))));
+            assert!(matches!(
+                update(
+                    c,
+                    999,
+                    &serde_json::from_value::<PersonPatch>(json!({})).unwrap()
+                ),
+                Err(StorageError::NotFound(_))
+            ));
             Ok(())
         })
         .unwrap();
