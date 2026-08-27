@@ -125,10 +125,13 @@ where
     I: DeserializeOwned,
     O: Serialize,
 {
+    // JSON Schema の表現力を typify 互換の範囲に制限しているため、i64 の範囲など
+    // Rust 型でのみ確定する入力違反はここで protocol-level invalid_params にする。
     let input: I = serde_json::from_value(args).map_err(|e| {
-        ToolError::internal(format!(
-            "validated arguments failed to deserialize into contract types: {e}"
+        ToolError::invalid_params(format!(
+            "arguments cannot be represented by the contract types: {e}"
         ))
+        .with_details(json!({"deserialization": e.to_string()}))
     })?;
     let out = f(ctx, input)?;
     Ok(serde_json::to_value(out)?)
@@ -327,6 +330,17 @@ mod tests {
                 .unwrap_err()
                 .code,
             ErrorCode::NotFound
+        );
+        assert_eq!(
+            s.call(
+                &agent(),
+                "get_person",
+                json!({"person_id": 9223372036854775808_u64})
+            )
+            .unwrap_err()
+            .code,
+            ErrorCode::InvalidParams,
+            "JSON Schema を通るが i64 に収まらない整数はクライアント入力違反"
         );
     }
 

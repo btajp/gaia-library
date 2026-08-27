@@ -70,6 +70,12 @@ fn to_rpc_error(e: &ToolError) -> ErrorData {
     ErrorData::new(code, e.message.clone(), Some(e.to_json()))
 }
 
+fn unknown_tool_error(name: &str) -> ErrorData {
+    to_rpc_error(
+        &ToolError::not_found(format!("unknown tool `{name}`")).with_details(json!({"tool": name})),
+    )
+}
+
 impl ServerHandler for GaiaServer {
     fn get_info(&self) -> ServerInfo {
         InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
@@ -102,10 +108,7 @@ impl ServerHandler for GaiaServer {
             .filter(|s| s.enabled)
             .is_none()
         {
-            return Err(ErrorData::invalid_params(
-                format!("unknown tool `{}`", request.name),
-                None,
-            ));
+            return Err(unknown_tool_error(request.name.as_ref()));
         }
         let args = request
             .arguments
@@ -133,7 +136,7 @@ impl ServerHandler for GaiaServer {
 
 #[cfg(test)]
 mod tests {
-    use super::to_tool;
+    use super::{to_tool, unknown_tool_error};
     use gaia_core::contracts::Catalog;
 
     #[test]
@@ -154,5 +157,14 @@ mod tests {
         // 自己完結スキーマ（外部 $ref なし）で公開される
         let text = serde_json::to_string(&*tool.input_schema).unwrap();
         assert!(!text.contains("common.json"));
+    }
+
+    #[test]
+    fn unknown_tool_error_has_machine_readable_product_code() {
+        let error = unknown_tool_error("missing");
+        assert_eq!(error.code.0, -32602);
+        let data = error.data.expect("structured error data");
+        assert_eq!(data["code"], "not_found");
+        assert_eq!(data["details"]["tool"], "missing");
     }
 }

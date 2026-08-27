@@ -169,6 +169,73 @@ pub fn find_by_request_id(
     raw.map(convert).transpose()
 }
 
+/// 既存提案と再送内容で異なる、冪等性判定対象のフィールド名を返す。
+pub fn differing_submission_fields(
+    existing: &Proposal,
+    candidate: &NewProposal,
+    submitted_provenance: &Option<Provenance>,
+) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    if existing.target_type != candidate.target_type {
+        fields.push("target_type");
+    }
+    if existing.action != candidate.action {
+        fields.push("action");
+    }
+    if existing.target_id != candidate.target_id {
+        fields.push("target_id");
+    }
+    if existing.patch != candidate.patch {
+        fields.push("patch");
+    }
+    if existing.kind != candidate.kind {
+        fields.push("kind");
+    }
+    if existing.scope != candidate.scope {
+        fields.push("scope");
+    }
+    let provenance_matches = match (&existing.provenance, submitted_provenance) {
+        (None, None) => existing.provenance_id.is_none(),
+        (None, Some(submitted)) => {
+            submitted.ref_id == existing.provenance_id
+                && submitted.system.is_none()
+                && submitted.uri.is_none()
+                && submitted.title.is_none()
+                && submitted.note.is_none()
+                && submitted.snapshot.is_none()
+        }
+        (Some(stored), Some(submitted)) if stored == submitted => {
+            // inline provenance の provenance_id は承認時に生成される結果なので比較対象外。
+            stored
+                .ref_id
+                .is_none_or(|ref_id| existing.provenance_id == Some(ref_id))
+        }
+        _ => false,
+    };
+    if !provenance_matches {
+        fields.push("provenance");
+    }
+    fields
+}
+
+/// クライアント・scope ごとの未決提案数。永続化上限の判定に使う。
+pub fn count_pending_by_client_scope(
+    conn: &Connection,
+    proposed_by: &str,
+    scope: &str,
+) -> Result<u64, StorageError> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM proposals WHERE proposed_by = ?1 AND scope = ?2 AND status = 'pending'",
+        params![proposed_by, scope],
+        |row| row.get(0),
+    )?;
+    u64::try_from(count).map_err(|_| {
+        StorageError::Integrity(format!(
+            "negative pending proposal count for client `{proposed_by}` in scope `{scope}`"
+        ))
+    })
+}
+
 pub fn list(
     conn: &Connection,
     status: ProposalStatus,
@@ -206,4 +273,159 @@ pub fn decide(conn: &Connection, id: i64, d: &Decision<'_>) -> Result<(), Storag
         return Err(StorageError::NotFound(format!("pending proposal {id}")));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::storage::{Db, affiliations};
+
+    fn setup() -> Db {
+        let db = Db::open_in_memory().unwrap();
+        db.with_conn::<_, StorageError>(|conn| {
+            affiliations::insert(conn, "cn", None)?;
+            affiliations::insert(conn, "other", None)?;
+            Ok(())
+        })
+        .unwrap();
+        db
+    }
+
+    fn candidate(request_id: &str) -> NewProposal {
+        NewProposal {
+            action: "insert".parse().unwrap(),
+            target_type: "person".parse().unwrap(),
+            target_id: None,
+            patch: json!({"name": "田中 太郎"}).as_object().unwrap().clone(),
+            kind: "fact".parse().unwrap(),
+            scope: "cn".into(),
+            provenance: None,
+            provenance_id: None,
+            proposed_by: "bot".into(),
+            request_id: request_id.into(),
+        }
+    }
+
+    #[test]
+    fn idempotency_comparison_covers_all_submission_fields() {
+        let db = setup();
+        db.with_conn::<_, StorageError>(|conn| {
+            let base = candidate("req-exact-1");
+            let id = insert(conn, &base)?;
+            let existing = get(conn, id)?.unwrap();
+            assert!(differing_submission_fields(&existing, &base, &None).is_empty());
+
+            let mut changed = base.clone();
+            changed.target_type = "organization".parse().unwrap();
+            assert_eq!(
+                differing_submission_fields(&existing, &changed, &None),
+                ["target_type"]
+            );
+
+            let mut changed = base.clone();
+            changed.action = "update".parse().unwrap();
+            assert_eq!(
+                differing_submission_fields(&existing, &changed, &None),
+                ["action"]
+            );
+
+            let mut changed = base.clone();
+            changed.target_id = Some(42);
+            assert_eq!(
+                differing_submission_fields(&existing, &changed, &None),
+                ["target_id"]
+            );
+
+            let mut changed = base.clone();
+            changed.patch.insert("role".into(), json!("PM"));
+            assert_eq!(
+                differing_submission_fields(&existing, &changed, &None),
+                ["patch"]
+            );
+
+            let mut changed = base.clone();
+            changed.kind = "inference".parse().unwrap();
+            assert_eq!(
+                differing_submission_fields(&existing, &changed, &None),
+                ["kind"]
+            );
+
+            let mut changed = base.clone();
+            changed.scope = "other".into();
+            assert_eq!(
+                differing_submission_fields(&existing, &changed, &None),
+                ["scope"]
+            );
+
+            let mut stored_ref = existing.clone();
+            stored_ref.provenance_id = Some(42);
+            let mut changed = base;
+            changed.provenance_id = Some(42);
+            let ref_only: Provenance = serde_json::from_value(json!({"ref_id": 42})).unwrap();
+            assert!(differing_submission_fields(&stored_ref, &changed, &Some(ref_only)).is_empty());
+            let mixed: Provenance =
+                serde_json::from_value(json!({"ref_id": 42, "note": "changed"})).unwrap();
+            assert_eq!(
+                differing_submission_fields(&stored_ref, &changed, &Some(mixed)),
+                ["provenance"]
+            );
+
+            let inline: Provenance = serde_json::from_value(json!({
+                "system": "notion", "uri": "https://example.test", "note": "source"
+            }))
+            .unwrap();
+            let mut stored_inline = existing.clone();
+            stored_inline.provenance = Some(inline.clone());
+            stored_inline.provenance_id = Some(99);
+            let mut changed = candidate("req-exact-1");
+            changed.provenance = Some(inline.clone());
+            assert!(
+                differing_submission_fields(&stored_inline, &changed, &Some(inline)).is_empty()
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn pending_count_is_partitioned_by_client_and_scope() {
+        let db = setup();
+        db.with_conn::<_, StorageError>(|conn| {
+            let first = candidate("req-count-1");
+            let first_id = insert(conn, &first)?;
+
+            let mut second = candidate("req-count-2");
+            insert(conn, &second)?;
+
+            second.request_id = "req-count-other-scope".into();
+            second.scope = "other".into();
+            insert(conn, &second)?;
+
+            second.request_id = "req-count-other-client".into();
+            second.scope = "cn".into();
+            second.proposed_by = "another-bot".into();
+            insert(conn, &second)?;
+
+            assert_eq!(count_pending_by_client_scope(conn, "bot", "cn")?, 2);
+            assert_eq!(count_pending_by_client_scope(conn, "bot", "other")?, 1);
+            assert_eq!(count_pending_by_client_scope(conn, "another-bot", "cn")?, 1);
+
+            decide(
+                conn,
+                first_id,
+                &Decision {
+                    status: "rejected".parse().unwrap(),
+                    decided_by: "human",
+                    result_id: None,
+                    provenance_id: None,
+                    note: None,
+                },
+            )?;
+            assert_eq!(count_pending_by_client_scope(conn, "bot", "cn")?, 1);
+            Ok(())
+        })
+        .unwrap();
+    }
 }

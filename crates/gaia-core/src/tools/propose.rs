@@ -15,22 +15,51 @@ use crate::{
 
 use super::CallContext;
 
+const MAX_PROPOSAL_JSON_BYTES: usize = 1024 * 1024;
+const MAX_PENDING_PROPOSALS_PER_CLIENT_SCOPE: u64 = 1_000;
+const MAX_REQUEST_ID_BYTES: usize = 256;
+
+enum ProposeAttempt {
+    Accepted(ProposeUpdateOutput),
+    Rejected(ToolError),
+}
+
+fn serialized_json_size(
+    patch: &serde_json::Map<String, serde_json::Value>,
+    provenance: &Option<crate::contracts::types::Provenance>,
+) -> Result<(usize, usize, usize), ToolError> {
+    let patch_bytes = serde_json::to_vec(patch)?.len();
+    let provenance_bytes = provenance
+        .as_ref()
+        .map(serde_json::to_vec)
+        .transpose()?
+        .map_or(0, |bytes| bytes.len());
+    let total_bytes = patch_bytes.checked_add(provenance_bytes).ok_or_else(|| {
+        ToolError::invalid_params("serialized patch and provenance size overflowed")
+    })?;
+    Ok((patch_bytes, provenance_bytes, total_bytes))
+}
+
 pub fn propose_update(
     ctx: &CallContext<'_>,
     input: ProposeUpdateInput,
 ) -> Result<ProposeUpdateOutput, ToolError> {
-    if input.request_id.trim().len() < 8 {
+    if input.request_id.len() > MAX_REQUEST_ID_BYTES {
+        return Err(
+            ToolError::invalid_params("request_id must be at most 256 UTF-8 bytes").with_details(
+                json!({
+                    "request_id_bytes": input.request_id.len(),
+                    "limit_bytes": MAX_REQUEST_ID_BYTES,
+                }),
+            ),
+        );
+    }
+    if input.request_id.trim().chars().count() < 8 {
         return Err(ToolError::invalid_params(
             "request_id must be at least 8 characters",
         ));
     }
-    domain::proposals::validate(
-        input.target_type,
-        input.action,
-        input.target_id,
-        &input.patch,
-    )?;
-    ctx.db.with_tx(|tx| {
+    let attempt = ctx.db.with_tx(|tx| {
         let scope = match input.scope.clone().or_else(|| ctx.client.default_scope.clone()) {
             Some(s) => s,
             None => {
@@ -40,28 +69,126 @@ pub fn propose_update(
                 )));
             }
         };
-        if !affiliations::exists(tx, &scope)? {
-            return Err(ToolError::not_found(format!("scope `{scope}` (affiliation) not found")));
-        }
-        // request_id による冪等化
+        let (provenance, provenance_id) = match &input.provenance {
+            Some(p) if p.ref_id.is_some() => (
+                None,
+                Some(p.ref_id.expect("checked")),
+            ),
+            Some(p) => (Some(p.clone()), None),
+            None => (None, None),
+        };
+        let candidate = proposals::NewProposal {
+            action: input.action,
+            target_type: input.target_type,
+            target_id: input.target_id,
+            patch: input.patch.clone(),
+            kind: input.kind,
+            scope: scope.clone(),
+            provenance,
+            provenance_id,
+            proposed_by: ctx.client.name.clone(),
+            request_id: input.request_id.clone(),
+        };
+
+        // 件数・容量ガードより先に完全一致を判定し、上限到達後の正当な再送も成功させる。
         if let Some(existing) = proposals::find_by_request_id(tx, &input.request_id)? {
-            if existing.proposed_by == ctx.client.name {
-                return Ok(ProposeUpdateOutput { proposal_id: existing.id, status: existing.status, duplicate: true });
+            if existing.proposed_by != ctx.client.name {
+                audit::record(
+                    tx,
+                    &ctx.client.name,
+                    "propose_conflict",
+                    &json!({
+                        "request_id": input.request_id,
+                        "reason": "request_id_owner_mismatch",
+                    }),
+                )?;
+                return Ok(ProposeAttempt::Rejected(ToolError::conflict(format!(
+                    "request_id `{}` was already used by another client",
+                    input.request_id
+                ))));
             }
-            return Err(ToolError::conflict(format!(
-                "request_id `{}` was already used by another client",
-                input.request_id
+
+            let differing_fields = proposals::differing_submission_fields(
+                &existing,
+                &candidate,
+                &input.provenance,
+            );
+            if differing_fields.is_empty() {
+                return Ok(ProposeAttempt::Accepted(ProposeUpdateOutput {
+                    proposal_id: existing.id,
+                    status: existing.status,
+                    duplicate: true,
+                }));
+            }
+
+            audit::record(
+                tx,
+                &ctx.client.name,
+                "propose_conflict",
+                &json!({
+                    "proposal_id": existing.id,
+                    "request_id": input.request_id,
+                    "reason": "idempotency_payload_mismatch",
+                    "differing_fields": differing_fields,
+                }),
+            )?;
+            return Ok(ProposeAttempt::Rejected(
+                ToolError::conflict(format!(
+                    "request_id `{}` was reused with different proposal content",
+                    input.request_id
+                ))
+                .with_details(json!({
+                    "proposal_id": existing.id,
+                    "request_id": input.request_id,
+                    "differing_fields": differing_fields,
+                })),
+            ));
+        }
+
+        if !affiliations::exists(tx, &scope)? {
+            return Err(ToolError::not_found(format!(
+                "scope `{scope}` (affiliation) not found"
             )));
         }
+        domain::proposals::validate(
+            input.target_type,
+            input.action,
+            input.target_id,
+            &input.patch,
+        )?;
+
+        let (patch_bytes, provenance_bytes, total_bytes) =
+            serialized_json_size(&input.patch, &input.provenance)?;
+        if total_bytes > MAX_PROPOSAL_JSON_BYTES {
+            return Err(ToolError::invalid_params(
+                "serialized patch and provenance exceed the 1 MiB proposal limit",
+            )
+            .with_details(json!({
+                "patch_bytes": patch_bytes,
+                "provenance_bytes": provenance_bytes,
+                "total_bytes": total_bytes,
+                "limit_bytes": MAX_PROPOSAL_JSON_BYTES,
+            })));
+        }
+
         // provenance の事前検証（ref_id は存在確認、inline は必須項目と紐付け先の型を確認）
-        let (provenance, provenance_id) = match &input.provenance {
-            None => (None, None),
+        match &input.provenance {
+            None => {}
             Some(p) if p.ref_id.is_some() => {
-                let rid = p.ref_id.expect("checked");
+                if p.system.is_some()
+                    || p.uri.is_some()
+                    || p.title.is_some()
+                    || p.note.is_some()
+                    || p.snapshot.is_some()
+                {
+                    return Err(ToolError::invalid_params(
+                        "provenance must contain either ref_id or inline source fields, not both",
+                    ));
+                }
+                let rid = candidate.provenance_id.expect("normalized above");
                 if refs::get(tx, rid, &ScopeSet::single(&scope))?.is_none() {
                     return Err(ToolError::not_found(format!("provenance ref {rid} (in scope `{scope}`)")));
                 }
-                (None, Some(rid))
             }
             Some(p) => {
                 let blankish = |v: &Option<String>| v.as_deref().map(str::trim).map(str::is_empty).unwrap_or(true);
@@ -74,32 +201,41 @@ pub fn propose_update(
                         input.target_type
                     )));
                 }
-                (Some(p.clone()), None)
             }
-        };
-        let id = proposals::insert(
-            tx,
-            &proposals::NewProposal {
-                action: input.action,
-                target_type: input.target_type,
-                target_id: input.target_id,
-                patch: input.patch.clone(),
-                kind: input.kind,
-                scope: scope.clone(),
-                provenance,
-                provenance_id,
-                proposed_by: ctx.client.name.clone(),
-                request_id: input.request_id.clone(),
-            },
-        )?;
+        }
+
+        let pending_count =
+            proposals::count_pending_by_client_scope(tx, &ctx.client.name, &scope)?;
+        if pending_count >= MAX_PENDING_PROPOSALS_PER_CLIENT_SCOPE {
+            return Err(ToolError::busy(format!(
+                "pending proposal limit reached for client `{}` in scope `{scope}`",
+                ctx.client.name
+            ))
+            .with_details(json!({
+                "proposed_by": ctx.client.name,
+                "scope": scope,
+                "pending_count": pending_count,
+                "limit": MAX_PENDING_PROPOSALS_PER_CLIENT_SCOPE,
+            })));
+        }
+
+        let id = proposals::insert(tx, &candidate)?;
         audit::record(
             tx,
             &ctx.client.name,
             "propose",
             &json!({"proposal_id": id, "target_type": input.target_type, "action": input.action, "scope": scope, "request_id": input.request_id}),
         )?;
-        Ok(ProposeUpdateOutput { proposal_id: id, status: ProposalStatus::Pending, duplicate: false })
-    })
+        Ok(ProposeAttempt::Accepted(ProposeUpdateOutput {
+            proposal_id: id,
+            status: ProposalStatus::Pending,
+            duplicate: false,
+        }))
+    })?;
+    match attempt {
+        ProposeAttempt::Accepted(output) => Ok(output),
+        ProposeAttempt::Rejected(error) => Err(error),
+    }
 }
 
 pub fn list_proposals(
@@ -193,120 +329,4 @@ pub fn reject_proposal(
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::error::ErrorCode;
-    use crate::tools::test_support::{agent, human, seed_basic, service};
-    use serde_json::json;
-
-    #[test]
-    fn agent_proposes_human_approves_and_duplicate_is_idempotent() {
-        let s = service();
-        let propose = |rid: &str| {
-            s.call(
-                &agent(),
-                "propose_update",
-                json!({
-                    "target_type": "person", "action": "insert",
-                    "patch": {"name": "田中 太郎"}, "kind": "fact", "request_id": rid
-                }),
-            )
-        };
-        let out = propose("req-tanaka-1").unwrap();
-        assert_eq!(out["status"], "pending");
-        assert_eq!(out["duplicate"], false);
-        let pid = out["proposal_id"].as_i64().unwrap();
-        // 同じ request_id の再送は duplicate
-        let dup = propose("req-tanaka-1").unwrap();
-        assert_eq!(dup["proposal_id"].as_i64().unwrap(), pid);
-        assert_eq!(dup["duplicate"], true);
-        // 一覧（pending 既定）
-        let listed = s.call(&agent(), "list_proposals", json!({})).unwrap();
-        assert!(
-            listed["proposals"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|p| p["id"].as_i64() == Some(pid))
-        );
-        // human が承認 → 適用結果が返る
-        let approved = s
-            .call(&human(), "approve_proposal", json!({"proposal_id": pid}))
-            .unwrap();
-        assert_eq!(approved["status"], "approved");
-        assert_eq!(approved["result"]["target_type"], "person");
-        // 二重承認は conflict
-        assert_eq!(
-            s.call(&human(), "approve_proposal", json!({"proposal_id": pid}))
-                .unwrap_err()
-                .code,
-            ErrorCode::Conflict
-        );
-    }
-
-    #[test]
-    fn short_request_id_and_unknown_scope_are_rejected() {
-        let s = service();
-        let err = s
-            .call(&agent(), "propose_update", json!({
-                "target_type": "person", "action": "insert", "patch": {"name": "x"}, "kind": "fact", "request_id": "short"
-            }))
-            .unwrap_err();
-        assert_eq!(err.code, ErrorCode::InvalidParams);
-        let err = s
-            .call(&agent(), "propose_update", json!({
-                "target_type": "person", "action": "insert", "patch": {"name": "x"}, "kind": "fact",
-                "scope": "zzz", "request_id": "req-00000001"
-            }))
-            .unwrap_err();
-        assert_eq!(err.code, ErrorCode::NotFound);
-    }
-
-    #[test]
-    fn failed_apply_keeps_proposal_pending() {
-        let s = service();
-        // 存在しない entity への fact 提案は propose では通り、approve で失敗して pending のまま
-        let out = s
-            .call(
-                &agent(),
-                "propose_update",
-                json!({
-                    "target_type": "fact", "action": "insert",
-                    "patch": {"entity_type": "person", "entity_id": 9999, "statement": "孤児 fact"},
-                    "kind": "inference", "request_id": "req-orphan-1"
-                }),
-            )
-            .unwrap();
-        let pid = out["proposal_id"].as_i64().unwrap();
-        let err = s
-            .call(&human(), "approve_proposal", json!({"proposal_id": pid}))
-            .unwrap_err();
-        assert_eq!(err.code, ErrorCode::NotFound);
-        let listed = s
-            .call(&human(), "list_proposals", json!({"status": "pending"}))
-            .unwrap();
-        assert!(
-            listed["proposals"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|p| p["id"].as_i64() == Some(pid))
-        );
-        // 却下できる
-        let rejected = s
-            .call(
-                &human(),
-                "reject_proposal",
-                json!({"proposal_id": pid, "reason": "対象が存在しない"}),
-            )
-            .unwrap();
-        assert_eq!(rejected["status"], "rejected");
-    }
-
-    #[test]
-    fn seed_basic_builds_a_connected_dataset() {
-        let s = service();
-        let ids = seed_basic(&s);
-        assert!(ids.org > 0 && ids.person > 0 && ids.engagement > 0);
-        assert!(ids.fact > 0 && ids.reference > 0 && ids.glossary > 0 && ids.interaction > 0);
-    }
-}
+mod tests;
