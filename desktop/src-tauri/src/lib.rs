@@ -1,6 +1,16 @@
 //! gaia-library デスクトップシェル。データ操作は Tauri commands を経由する。
+mod commands;
+mod first_run;
+mod lifecycle;
+mod state;
+
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            lifecycle::show_main(app);
+        }))
+        .manage(state::bootstrap())
+        .manage(lifecycle::ExitState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(
@@ -14,6 +24,24 @@ pub fn run() {
                 ])
                 .build(),
         )
-        .run(tauri::generate_context!())
-        .expect("error while running gaia-library");
+        .invoke_handler(tauri::generate_handler![
+            commands::is_initialized,
+            commands::first_run_setup,
+            commands::call_tool,
+            commands::server_status,
+        ])
+        .setup(lifecycle::setup)
+        .on_window_event(|window, event| {
+            if window.label() == "main"
+                && let tauri::WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                if let Err(error) = window.hide() {
+                    log::warn!("ウィンドウを隠せません: {error}");
+                }
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building gaia-library")
+        .run(lifecycle::on_run_event);
 }
