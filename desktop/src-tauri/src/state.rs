@@ -20,7 +20,7 @@ use gaia_mcp::BoundServer;
 use serde::Serialize;
 use tokio::sync::Mutex;
 
-use crate::first_run;
+use crate::{client_settings, first_run};
 
 #[derive(Serialize)]
 pub struct SetupResponse {
@@ -48,8 +48,8 @@ enum Initialization {
 }
 
 pub struct DesktopState {
-    initialization: RwLock<Initialization>,
-    setup_lock: Mutex<()>,
+    initialization: Arc<RwLock<Initialization>>,
+    setup_lock: Arc<Mutex<()>>,
     closing: AtomicBool,
 }
 
@@ -63,6 +63,7 @@ pub struct AppState {
     pub service: Arc<ToolService>,
     pub human: ClientIdentity,
     pub config_path: PathBuf,
+    pub db_path: PathBuf,
     http: Mutex<HttpState>,
     // 所有用の http guard は shutdown().await をまたがず、開始・終了だけを直列化する。
     http_lifecycle: Mutex<()>,
@@ -73,11 +74,13 @@ impl AppState {
         service: Arc<ToolService>,
         human: ClientIdentity,
         config_path: PathBuf,
+        db_path: PathBuf,
     ) -> Self {
         Self {
             service,
             human,
             config_path,
+            db_path,
             http: Mutex::default(),
             http_lifecycle: Mutex::default(),
         }
@@ -91,8 +94,8 @@ pub fn bootstrap() -> DesktopState {
 fn bootstrap_with(lookup: &dyn Fn(&str) -> Option<OsString>) -> DesktopState {
     let initialization = load_initialization(lookup).unwrap_or_else(Initialization::Failed);
     DesktopState {
-        initialization: RwLock::new(initialization),
-        setup_lock: Mutex::default(),
+        initialization: Arc::new(RwLock::new(initialization)),
+        setup_lock: Arc::default(),
         closing: AtomicBool::new(false),
     }
 }
@@ -121,7 +124,12 @@ fn load_initialization(
     let human = select_human(&config)?;
     let catalog = Catalog::embedded().map_err(|e| e.to_string())?;
     let db = Db::open(&db_path).map_err(|e| e.to_string())?;
-    let app_state = AppState::new(Arc::new(ToolService::new(db, catalog)), human, config_path);
+    let app_state = AppState::new(
+        Arc::new(ToolService::new(db, catalog)),
+        human,
+        config_path,
+        db_path,
+    );
     Ok(Initialization::Ready(Arc::new(app_state)))
 }
 
@@ -174,6 +182,7 @@ impl DesktopState {
         }
     }
 
+    #[cfg(test)]
     pub async fn initialize(&self, affiliation: &str, user: &str) -> Result<SetupResponse, String> {
         let affiliation = affiliation.to_owned();
         let user = user.to_owned();
@@ -183,14 +192,28 @@ impl DesktopState {
         .await
     }
 
-    async fn initialize_with(
+    pub(crate) async fn initialize_and_store(
         &self,
-        initialize: impl FnOnce(SetupPaths) -> Result<(AppState, SetupResponse), String>
-        + Send
-        + 'static,
-    ) -> Result<SetupResponse, String> {
+        affiliation: &str,
+        user: &str,
+    ) -> Result<(SetupResponse, client_settings::KeyStorage), String> {
+        let affiliation = affiliation.to_owned();
+        let user = user.to_owned();
+        self.initialize_with(move |paths| {
+            let (runtime, response) =
+                first_run::setup(&paths.config_path, &paths.db_path, &affiliation, &user)?;
+            let storage = client_settings::store_key(first_run::AGENT_CLIENT, &response.agent_key);
+            Ok((runtime, (response, storage)))
+        })
+        .await
+    }
+
+    async fn initialize_with<R: Send + 'static>(
+        &self,
+        initialize: impl FnOnce(SetupPaths) -> Result<(AppState, R), String> + Send + 'static,
+    ) -> Result<R, String> {
         self.ensure_open()?;
-        let _setup = self.setup_lock.lock().await;
+        let guard = self.setup_lock.clone().lock_owned().await;
         self.ensure_open()?;
         let paths = {
             let initialization = self
@@ -203,15 +226,39 @@ impl DesktopState {
                 Initialization::Failed(error) => return Err(error.clone()),
             }
         };
-        let (runtime, response) = tokio::task::spawn_blocking(move || initialize(paths))
-            .await
-            .map_err(|e| format!("初回セットアップの処理に失敗しました: {e}"))??;
-        *self
-            .initialization
-            .write()
-            .map_err(|_| "初期化状態を保存できません".to_string())? =
-            Initialization::Ready(Arc::new(runtime));
-        Ok(response)
+        let initialization = self.initialization.clone();
+        tokio::task::spawn_blocking(move || {
+            // 待機側が取り消されても、設定の公開と状態への反映は最後まで一組で行う。
+            let _guard = guard;
+            let (runtime, response) = initialize(paths)?;
+            *initialization
+                .write()
+                .map_err(|_| "初期化状態を保存できません".to_string())? =
+                Initialization::Ready(Arc::new(runtime));
+            Ok(response)
+        })
+        .await
+        .map_err(|_| "初回セットアップの処理に失敗しました".to_string())?
+    }
+
+    pub(crate) async fn run_settings<R: Send + 'static>(
+        &self,
+        operation: impl FnOnce(Arc<AppState>) -> Result<R, String> + Send + 'static,
+    ) -> Result<R, String> {
+        self.ensure_open()?;
+        let guard = self.setup_lock.clone().lock_owned().await;
+        self.ensure_open()?;
+        let runtime = self.runtime()?;
+        if runtime.human.role != Role::Human {
+            return Err("設定操作には human クライアントが必要です".into());
+        }
+        // IPC の待機が取り消されても、書込完了までは終了処理を待たせる。
+        tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            operation(runtime)
+        })
+        .await
+        .map_err(|_| "設定操作の処理に失敗しました".to_string())?
     }
 
     pub async fn start_http(&self) -> Result<(), String> {
@@ -271,10 +318,17 @@ impl DesktopState {
     pub async fn shutdown(&self) -> Result<(), String> {
         self.closing.store(true, Ordering::SeqCst);
         let _setup = self.setup_lock.lock().await;
-        if !self.initialized()? {
-            return Ok(());
-        }
-        let runtime = self.runtime()?;
+        let runtime = {
+            let initialization = self
+                .initialization
+                .read()
+                .map_err(|_| "初期化状態を読み取れません".to_string())?;
+            match &*initialization {
+                Initialization::Ready(runtime) => runtime.clone(),
+                // 初期化前・起動失敗では、停止する HTTP サーバー自体がない。
+                Initialization::Waiting(_) | Initialization::Failed(_) => return Ok(()),
+            }
+        };
         let _lifecycle = runtime.http_lifecycle.lock().await;
         let server = {
             let mut http = runtime.http.lock().await;

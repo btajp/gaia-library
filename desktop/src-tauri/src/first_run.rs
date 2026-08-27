@@ -84,6 +84,7 @@ fn setup_with_publisher(
         Arc::new(ToolService::new(db, catalog)),
         human,
         config_path.to_path_buf(),
+        db_path.to_path_buf(),
     );
     // 平文キーは保存成功後にだけ返し、状態やログには保持しない。
     Ok((app_state, SetupResponse { agent_key }))

@@ -23,14 +23,20 @@ describe("Tauri command boundary", () => {
     await expect(api.isInitialized()).rejects.toBe("config is unreadable");
   });
 
-  it("trims setup fields and returns the issued key", async () => {
-    const result = { agent_key: "test-only-issued-key" };
+  it("trims setup fields and returns the issued key and storage status", async () => {
+    const result = { agent_key: "test-only-issued-key", storage: { location: "keychain", error: null } };
     invoke.mockResolvedValueOnce(result);
     expect(await api.firstRunSetup("  personal  ", " user ")).toBe(result);
     expect(invoke).toHaveBeenCalledWith("first_run_setup", {
       affiliation: "personal",
       userName: "user",
     });
+  });
+
+  it("preserves an issued setup key when plaintext storage fails", async () => {
+    const result = { agent_key: "test-only-issued-key", storage: { location: null, error: "storage failed" } };
+    invoke.mockResolvedValueOnce(result);
+    expect(await api.firstRunSetup("personal", "user")).toBe(result);
   });
 
   it("preserves server status fields", async () => {
@@ -106,14 +112,37 @@ describe("initial screen markup", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("labels the issued key as secret and explains its one-time lifetime", () => {
+  it("labels the issued key as secret and explains Keychain storage", () => {
     const html = renderToStaticMarkup(
-      createElement(IssuedKey, { agentKey: "test-only-issued-key", onClose: () => {} }),
+      createElement(IssuedKey, { agentKey: "test-only-issued-key", storage: { location: "keychain", error: null }, onClose: () => {} }),
     );
     expect(html).toContain("秘密情報");
-    expect(html).toContain("再表示できません");
+    expect(html).toContain("Keychain に保管しました");
+    expect(html).toContain("接続設定を再表示できます");
+    expect(html).not.toContain("再表示できません");
+    expect(html).not.toContain("平文はアプリに保存しません");
     expect(html).toContain("閉じてメイン画面へ");
     expect(html).toContain("test-only-issued-key");
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("explains file fallback without hiding the issued key", () => {
+    const html = renderToStaticMarkup(
+      createElement(IssuedKey, { agentKey: "test-only-issued-key", storage: { location: "file", error: null }, onClose: () => {} }),
+    );
+    expect(html).toContain("権限 0600");
+    expect(html).toContain("Keychain を利用できなかったため");
+    expect(html).toContain("test-only-issued-key");
+  });
+
+  it("keeps an unpreserved valid key visible and warns before closing", () => {
+    const html = renderToStaticMarkup(
+      createElement(IssuedKey, { agentKey: "test-only-issued-key", storage: { location: null, error: "storage failed" }, onClose: () => {} }),
+    );
+    expect(html).toContain("キーの発行は完了しています");
+    expect(html).toContain("閉じる前に安全な場所へコピー");
+    expect(html).toContain("再表示できません");
+    expect(html).toContain("storage failed");
+    expect(html).toContain("test-only-issued-key");
   });
 });

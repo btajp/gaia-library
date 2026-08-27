@@ -230,6 +230,18 @@ async fn shutdown_before_initialization_is_terminal() {
 }
 
 #[tokio::test]
+async fn shutdown_after_bootstrap_failure_preserves_the_startup_error_without_shutdown_error() {
+    let state = bootstrap_with(&|_| None);
+    let startup_error = state.initialized().unwrap_err();
+    state.shutdown().await.unwrap();
+    state.shutdown().await.unwrap();
+    assert_eq!(state.initialized().unwrap_err(), startup_error);
+    assert_eq!(state.server_status().await.error, Some(startup_error));
+    assert!(state.initialize("scope", "user").await.is_err());
+    assert!(state.start_http().await.is_err());
+}
+
+#[tokio::test]
 async fn shutdown_waits_for_initialization_and_blocks_later_http_start() {
     let dir = tempfile::tempdir().unwrap();
     let state = Arc::new(bootstrap_at(dir.path()));
@@ -269,6 +281,136 @@ async fn shutdown_waits_for_initialization_and_blocks_later_http_start() {
     assert!(state.initialized().unwrap());
     assert!(state.server_status().await.url.is_none());
     assert!(state.start_http().await.is_err());
+}
+
+#[tokio::test]
+async fn settings_mutations_reload_and_serialize_config_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    save_config(dir.path(), &config_with_human());
+    let state = Arc::new(bootstrap_at(dir.path()));
+    let mut tasks = Vec::new();
+    for index in 0..8 {
+        let state = state.clone();
+        tasks.push(tokio::spawn(async move {
+            state
+                .run_settings(move |runtime| {
+                    let mut config =
+                        Config::load(&runtime.config_path).map_err(|e| e.to_string())?;
+                    config
+                        .add_client(client(&format!("bot-{index}"), Role::Agent))
+                        .map_err(|e| e.to_string())?;
+                    config.save(&runtime.config_path).map_err(|e| e.to_string())
+                })
+                .await
+        }));
+    }
+    for task in tasks {
+        task.await.unwrap().unwrap();
+    }
+    assert_eq!(
+        Config::load(&dir.path().join("config.toml"))
+            .unwrap()
+            .clients
+            .len(),
+        9
+    );
+    state.shutdown().await.unwrap();
+    assert!(state.run_settings(|_| Ok(())).await.is_err());
+}
+
+#[tokio::test]
+async fn cancelled_settings_waiter_does_not_release_the_write_before_shutdown() {
+    let dir = tempfile::tempdir().unwrap();
+    save_config(dir.path(), &config_with_human());
+    let state = Arc::new(bootstrap_at(dir.path()));
+    let (entered, entered_receiver) = tokio::sync::oneshot::channel();
+    let (resume, resumed) = std::sync::mpsc::channel();
+    let operation = {
+        let state = state.clone();
+        tokio::spawn(async move {
+            state
+                .run_settings(move |runtime| {
+                    entered.send(()).unwrap();
+                    resumed.recv().unwrap();
+                    let mut config =
+                        Config::load(&runtime.config_path).map_err(|e| e.to_string())?;
+                    config.server.port = Some(4321);
+                    config.save(&runtime.config_path).map_err(|e| e.to_string())
+                })
+                .await
+        })
+    };
+    entered_receiver.await.unwrap();
+    operation.abort();
+    assert!(matches!(operation.await, Err(error) if error.is_cancelled()));
+    let stopping = {
+        let state = state.clone();
+        tokio::spawn(async move { state.shutdown().await })
+    };
+    tokio::task::yield_now().await;
+    assert!(!stopping.is_finished());
+    resume.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(3), stopping)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        Config::load(&dir.path().join("config.toml"))
+            .unwrap()
+            .server
+            .port,
+        Some(4321)
+    );
+}
+
+#[tokio::test]
+async fn cancelled_setup_waiter_still_publishes_runtime_before_shutdown() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = Arc::new(bootstrap_at(dir.path()));
+    let (entered, entered_receiver) = tokio::sync::oneshot::channel();
+    let (resume, resumed) = std::sync::mpsc::channel();
+    let operation = {
+        let state = state.clone();
+        tokio::spawn(async move {
+            state
+                .initialize_with(move |paths| {
+                    entered.send(()).unwrap();
+                    resumed.recv().unwrap();
+                    first_run::setup(&paths.config_path, &paths.db_path, "scope", "user")
+                })
+                .await
+        })
+    };
+    entered_receiver.await.unwrap();
+    operation.abort();
+    assert!(matches!(operation.await, Err(error) if error.is_cancelled()));
+    let stopping = {
+        let state = state.clone();
+        tokio::spawn(async move { state.shutdown().await })
+    };
+    tokio::task::yield_now().await;
+    assert!(!stopping.is_finished());
+    resume.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(3), stopping)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(state.initialized().unwrap());
+    assert_eq!(state.runtime().unwrap().human.name, "desktop:user");
+}
+
+#[test]
+fn runtime_remembers_the_opened_database_even_when_config_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = config_with_human();
+    config.db_path = Some(dir.path().join("different.db"));
+    save_config(dir.path(), &config);
+    let state = bootstrap_at(dir.path());
+    let runtime = state.runtime().unwrap();
+    assert_eq!(runtime.db_path, dir.path().join("gaia.db"));
+    assert!(!dir.path().join("different.db").exists());
 }
 
 async fn http_request(url: &str, key: &str) -> String {

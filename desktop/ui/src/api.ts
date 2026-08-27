@@ -18,7 +18,12 @@ export class GaiaError extends Error {
   }
 }
 
-export type FirstRunResult = { agent_key: string };
+export type KeyStorage = {
+  location: "keychain" | "file" | null;
+  error: string | null;
+};
+
+export type FirstRunResult = { agent_key: string; storage: KeyStorage };
 
 export type ServerStatus = {
   url: string | null;

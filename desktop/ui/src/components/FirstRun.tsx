@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { errorMessage, firstRunSetup } from "../api";
+import { errorMessage, firstRunSetup, type FirstRunResult } from "../api";
 
 type Props = {
-  onComplete: (agentKey: string) => void;
+  onComplete: (result: FirstRunResult) => void;
 };
 
 export default function FirstRun({ onComplete }: Props) {
@@ -38,7 +38,7 @@ export default function FirstRun({ onComplete }: Props) {
         normalizedAffiliation,
         normalizedUserName,
       );
-      if (mounted.current) onComplete(result.agent_key);
+      if (mounted.current) onComplete(result);
     } catch (cause) {
       submitting.current = false;
       if (mounted.current) {
@@ -55,6 +55,7 @@ export default function FirstRun({ onComplete }: Props) {
       </h2>
       <p className="mt-2 text-sm leading-6 text-neutral-400">
         記憶を分ける所属元と、このアプリで使うユーザーを登録します。
+        エージェント「claude-code」の接続キーも発行し、Keychain または権限 0600 のファイルへ保管します。
       </p>
       <form onSubmit={submit} className="mt-6 space-y-5" aria-busy={busy}>
         <div>

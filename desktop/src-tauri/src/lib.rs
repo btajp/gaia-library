@@ -1,7 +1,11 @@
 //! gaia-library デスクトップシェル。データ操作は Tauri commands を経由する。
+mod cli_link;
+mod client_settings;
 mod commands;
 mod first_run;
+pub mod keychain;
 mod lifecycle;
+mod settings_commands;
 mod state;
 
 pub fn run() {
@@ -29,6 +33,14 @@ pub fn run() {
             commands::first_run_setup,
             commands::call_tool,
             commands::server_status,
+            settings_commands::admin_affiliation_add,
+            settings_commands::admin_affiliation_list,
+            settings_commands::admin_client_add,
+            settings_commands::admin_client_list,
+            settings_commands::admin_client_keygen,
+            settings_commands::mcp_config_snippet,
+            settings_commands::cli_link_status,
+            settings_commands::cli_link_create,
         ])
         .setup(lifecycle::setup)
         .on_window_event(|window, event| {

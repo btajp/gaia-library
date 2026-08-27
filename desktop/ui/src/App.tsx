@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { errorMessage, isInitialized } from "./api";
+import { errorMessage, isInitialized, type FirstRunResult } from "./api";
 import FirstRun from "./components/FirstRun";
 import IssuedKey from "./components/IssuedKey";
 import MainShell from "./components/MainShell";
@@ -7,7 +7,7 @@ import MainShell from "./components/MainShell";
 type StartupState =
   | { phase: "checking" }
   | { phase: "first-run" }
-  | { phase: "issued-key"; agentKey: string }
+  | { phase: "issued-key"; result: FirstRunResult }
   | { phase: "ready" }
   | { phase: "error"; message: string };
 
@@ -67,12 +67,13 @@ export default function App() {
         )}
         {startup.phase === "first-run" && (
           <FirstRun
-            onComplete={(agentKey) => setStartup({ phase: "issued-key", agentKey })}
+            onComplete={(result) => setStartup({ phase: "issued-key", result })}
           />
         )}
         {startup.phase === "issued-key" && (
           <IssuedKey
-            agentKey={startup.agentKey}
+            agentKey={startup.result.agent_key}
+            storage={startup.result.storage}
             onClose={() => setStartup({ phase: "ready" })}
           />
         )}

@@ -8,6 +8,7 @@ import Proposals from "./Proposals";
 import SaveNotice from "./SaveNotice";
 import Search from "./Search";
 import Detail from "./Detail";
+import Settings from "./Settings";
 
 const TABS = [
   { id: "search", label: "検索" },
@@ -43,11 +44,7 @@ function Workspace({ tab, scope, save, decisions, restoreOperation, showProposal
         {tab === "search" && <Search scope={scope} openDetail={openDetail} />}
         {tab === "proposals" && <Proposals scope={scope} decisions={decisions} openDetail={openDetail} />}
         {tab === "add" && <AddForms scope={scope} controller={save} openDetail={openDetail} restoreOperation={restoreOperation} showProposals={showProposals} />}
-        {tab === "settings" && <>
-          <h2 className="text-xl font-semibold">{label}</h2>
-          <p className="mt-3 text-sm text-neutral-400">この画面は準備中です。</p>
-          <p className="mt-2 text-sm text-neutral-400">対象 scope: {scope || "クライアントの既定値"}</p>
-        </>}
+        {tab === "settings" && <Settings />}
       </div>
       {detail && <Detail target={detail} scope={scope} onBack={() => setDetail(null)} openDetail={openDetail} backLabel={`${label}へ戻る`} />}
     </section>

@@ -1,0 +1,20 @@
+import AffiliationsSettings from "./settings/AffiliationsSettings";
+import ClientsSettings from "./settings/ClientsSettings";
+import CliSettings from "./settings/CliSettings";
+import { ServerSettings, VersionSettings } from "./settings/RuntimeSettings";
+
+export default function Settings() {
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-xl font-semibold">設定</h2>
+        <p className="mt-2 text-sm leading-6 text-neutral-400">所属元とクライアントの設定は、上の対象 scope の選択に関係なくアプリ全体に適用されます。</p>
+      </div>
+      <AffiliationsSettings />
+      <ClientsSettings />
+      <ServerSettings />
+      <CliSettings />
+      <VersionSettings />
+    </div>
+  );
+}

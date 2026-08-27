@@ -1,9 +1,19 @@
 //! UI から許可済みの core API へ渡す薄いコマンド。
 use gaia_core::error::ToolError;
+use serde::Serialize;
 use serde_json::Value;
 use tauri::State;
 
-use crate::state::{DesktopState, ServerStatus, SetupResponse};
+use crate::{
+    client_settings::KeyStorage,
+    state::{DesktopState, ServerStatus},
+};
+
+#[derive(Serialize)]
+pub(crate) struct FirstRunResponse {
+    agent_key: String,
+    storage: KeyStorage,
+}
 
 #[tauri::command]
 pub fn is_initialized(state: State<'_, DesktopState>) -> Result<bool, String> {
@@ -11,15 +21,18 @@ pub fn is_initialized(state: State<'_, DesktopState>) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub async fn first_run_setup(
+pub(crate) async fn first_run_setup(
     state: State<'_, DesktopState>,
     affiliation: String,
     user_name: String,
-) -> Result<SetupResponse, String> {
-    let response = state.initialize(&affiliation, &user_name).await?;
+) -> Result<FirstRunResponse, String> {
+    let (response, storage) = state.initialize_and_store(&affiliation, &user_name).await?;
     // HTTP の失敗は server_status に残す。初期化済みの UI はそのまま利用できる。
     let _ = state.start_http().await;
-    Ok(response)
+    Ok(FirstRunResponse {
+        agent_key: response.agent_key,
+        storage,
+    })
 }
 
 #[tauri::command]

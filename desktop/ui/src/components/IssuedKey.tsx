@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
+import type { KeyStorage } from "../api";
+import KeyStorageNotice from "./KeyStorageNotice";
 
 type Props = {
   agentKey: string;
+  storage: KeyStorage;
   onClose: () => void;
 };
 
-export default function IssuedKey({ agentKey, onClose }: Props) {
+export default function IssuedKey({ agentKey, storage, onClose }: Props) {
   const [copying, setCopying] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,9 +51,9 @@ export default function IssuedKey({ agentKey, onClose }: Props) {
         セットアップが完了しました
       </h2>
       <p id="issued-key-help" className="mt-3 text-sm leading-6 text-neutral-300">
-        エージェント「claude-code」の接続キーです。この画面を閉じると再表示できません。
-        必要ならコピーし、安全な場所に保管してください。キーの平文はアプリに保存しません。
+        エージェント「claude-code」の接続キーです。共有・送信先に注意してください。
       </p>
+      <div className="mt-3"><KeyStorageNotice storage={storage} /></div>
       <label htmlFor="issued-key" className="mt-5 block text-sm font-medium">
         発行したキー（秘密情報）
       </label>
