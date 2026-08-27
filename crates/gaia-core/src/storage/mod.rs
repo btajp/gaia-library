@@ -100,6 +100,7 @@ pub mod glossary;
 pub mod interactions;
 pub mod organizations;
 pub mod people;
+pub mod proposals;
 pub mod refs;
 pub mod targets;
 
