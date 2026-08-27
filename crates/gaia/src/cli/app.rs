@@ -5,8 +5,9 @@ use anyhow::{Context, bail};
 use serde_json::Value;
 
 use gaia_core::{
-    config::{self, CliConfig, Config},
+    config::{self, CliConfig, Config, ConfigError},
     contracts::Catalog,
+    error::ToolError,
     identity::{ClientIdentity, Role},
     storage::Db,
     tools::ToolService,
@@ -43,15 +44,13 @@ impl App {
         Ok(self.config.resolve_client(name)?.clone())
     }
 
-    pub fn call(&self, client: &ClientIdentity, tool: &str, args: Value) -> anyhow::Result<Value> {
-        self.service.call(client, tool, args).map_err(|e| {
-            let details = e
-                .details
-                .clone()
-                .map(|d| format!("\n{d:#}"))
-                .unwrap_or_default();
-            anyhow::anyhow!("{e}{details}")
-        })
+    pub fn call(
+        &self,
+        client: &ClientIdentity,
+        tool: &str,
+        args: Value,
+    ) -> Result<Value, ToolError> {
+        self.service.call(client, tool, args)
     }
 }
 
@@ -70,19 +69,27 @@ pub fn print_json(value: &Value, compact: bool) {
     }
 }
 
-pub fn init(args: &super::InitArgs, config_override: Option<&PathBuf>) -> anyhow::Result<()> {
+pub fn init(
+    args: &super::InitArgs,
+    config_override: Option<&PathBuf>,
+    cli_client: Option<&str>,
+) -> anyhow::Result<()> {
     let config_path = resolve_config_path(config_override)?;
-    if config_path.exists() {
-        bail!(
-            "設定が既にあります: {} — affiliation は `gaia affiliation add`、クライアントは `gaia client add` を使ってください",
-            config_path.display()
-        );
+    if cli_client.is_some() && args.client_name.is_some() {
+        return Err(ToolError::invalid_params(
+            "--client と互換用の --client-name は同時に指定できません",
+        )
+        .into());
     }
-    let client_name = args
-        .client_name
-        .clone()
+    let client_name = cli_client
+        .map(str::to_owned)
+        .or_else(|| args.client_name.clone())
         .or_else(|| std::env::var("USER").ok())
         .unwrap_or_else(|| "me".to_string());
+    let affiliation = args.affiliation.trim();
+    if affiliation.is_empty() {
+        return Err(ToolError::invalid_params("--affiliation は空にできません").into());
+    }
     let mut config = Config {
         db_path: args.db.clone(),
         cli: CliConfig {
@@ -93,22 +100,37 @@ pub fn init(args: &super::InitArgs, config_override: Option<&PathBuf>) -> anyhow
     config.add_client(ClientIdentity {
         name: client_name.clone(),
         role: Role::Human,
-        default_scope: Some(args.affiliation.clone()),
+        default_scope: Some(affiliation.to_string()),
     })?;
-    config.save(&config_path)?;
-    let db = Db::open(&config::db_path(&config)?)?;
-    gaia_core::admin::add_affiliation(
-        &db,
-        &client_name,
-        &args.affiliation,
-        args.identity.as_deref(),
-    )?;
+    let db_path = config::db_path(&config)?;
+    let result = config.create_with(&config_path, || -> anyhow::Result<()> {
+        let db = Db::open(&db_path)?;
+        gaia_core::admin::initialize_affiliation(
+            &db,
+            &client_name,
+            affiliation,
+            args.identity.as_deref(),
+        )?;
+        Ok(())
+    });
+    if let Err(error) = result {
+        if matches!(
+            error.downcast_ref::<ConfigError>(),
+            Some(ConfigError::AlreadyExists(_))
+        ) {
+            bail!(
+                "設定が既にあります: {} — affiliation は `gaia affiliation add`、クライアントは `gaia client add` を使ってください",
+                config_path.display()
+            );
+        }
+        return Err(error);
+    }
     eprintln!("初期化しました:");
     eprintln!("  config: {}", config_path.display());
-    eprintln!("  db:     {}", config::db_path(&config)?.display());
+    eprintln!("  db:     {}", db_path.display());
     eprintln!(
         "  human client: {client_name} (default_scope={})",
-        args.affiliation
+        affiliation
     );
     Ok(())
 }

@@ -1,8 +1,10 @@
 //! 設定ファイル（TOML）とパス解決。仕様書 §7.1。XDG 配置を macOS でも使う。
 use std::{
-    ffi::OsString,
-    fs,
+    ffi::{OsStr, OsString},
+    fs::{self, File, OpenOptions},
+    io::Write,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use serde::{Deserialize, Serialize};
@@ -10,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::identity::{ClientIdentity, Role};
 
 pub const APP_DIR: &str = "gaia-library";
+static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -49,6 +52,8 @@ pub enum ConfigError {
     Parse { path: PathBuf, message: String },
     #[error("cannot serialize config: {0}")]
     Serialize(String),
+    #[error("config {0} already exists")]
+    AlreadyExists(PathBuf),
     #[error("unknown client `{0}` (see [[clients]] in the config file)")]
     UnknownClient(String),
     #[error("client `{0}` already exists")]
@@ -119,27 +124,70 @@ impl Config {
     }
 
     pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
-        let text =
-            toml::to_string_pretty(self).map_err(|e| ConfigError::Serialize(e.to_string()))?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|source| ConfigError::Write {
-                path: path.to_path_buf(),
-                source,
-            })?;
-        }
-        fs::write(path, text).map_err(|source| ConfigError::Write {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|source| {
-                ConfigError::Write {
+        let _lock = ConfigFileLock::acquire(path)?;
+        self.save_atomic(path, true)
+    }
+
+    /// 初期化処理から新規設定の公開までを同じ lock で直列化し、既存設定は上書きしない。
+    /// 設定保存に失敗する場合があるため、`initialize` の副作用は再実行可能にすること。
+    pub fn create_with<R, E: From<ConfigError>>(
+        &self,
+        path: &Path,
+        initialize: impl FnOnce() -> Result<R, E>,
+    ) -> Result<R, E> {
+        let _lock = ConfigFileLock::acquire(path)?;
+        match fs::symlink_metadata(path) {
+            Ok(_) => return Err(ConfigError::AlreadyExists(path.to_path_buf()).into()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(ConfigError::Read {
                     path: path.to_path_buf(),
                     source,
                 }
-            })?;
+                .into());
+            }
+        }
+        let output = initialize()?;
+        self.save_atomic(path, false)?;
+        Ok(output)
+    }
+
+    /// 同じ設定への read-modify-write 全体を兄弟 lock file で直列化する。
+    pub fn update<R>(
+        path: &Path,
+        update: impl FnOnce(&mut Self) -> Result<R, ConfigError>,
+    ) -> Result<R, ConfigError> {
+        let _lock = ConfigFileLock::acquire(path)?;
+        let mut config = Self::load(path)?;
+        let output = update(&mut config)?;
+        config.save_atomic(path, true)?;
+        Ok(output)
+    }
+
+    fn save_atomic(&self, path: &Path, replace: bool) -> Result<(), ConfigError> {
+        let text =
+            toml::to_string_pretty(self).map_err(|e| ConfigError::Serialize(e.to_string()))?;
+        let (mut temporary, temporary_path) = create_temporary_file(path)?;
+        let result = (|| {
+            temporary.write_all(text.as_bytes())?;
+            temporary.sync_all()?;
+            drop(temporary);
+            if replace {
+                fs::rename(&temporary_path, path)
+            } else {
+                // hard link の公開は既存パス（dangling symlink を含む）を置き換えない。
+                fs::hard_link(&temporary_path, path)
+            }
+        })();
+        let _ = fs::remove_file(&temporary_path);
+        if let Err(source) = result {
+            if !replace && source.kind() == std::io::ErrorKind::AlreadyExists {
+                return Err(ConfigError::AlreadyExists(path.to_path_buf()));
+            }
+            return Err(ConfigError::Write {
+                path: path.to_path_buf(),
+                source,
+            });
         }
         Ok(())
     }
@@ -180,10 +228,112 @@ impl Config {
     }
 }
 
+struct ConfigFileLock {
+    _file: File,
+}
+
+impl ConfigFileLock {
+    fn acquire(config_path: &Path) -> Result<Self, ConfigError> {
+        ensure_parent(config_path)?;
+        let lock_path = sibling_path(config_path, ".lock");
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options
+            .open(&lock_path)
+            .map_err(|source| ConfigError::Write {
+                path: lock_path.clone(),
+                source,
+            })?;
+        #[cfg(unix)]
+        set_private_permissions(&file, &lock_path)?;
+        file.lock().map_err(|source| ConfigError::Write {
+            path: lock_path,
+            source,
+        })?;
+        Ok(Self { _file: file })
+    }
+}
+
+fn ensure_parent(path: &Path) -> Result<(), ConfigError> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|source| ConfigError::Write {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    }
+    Ok(())
+}
+
+fn sibling_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut file_name = path
+        .file_name()
+        .unwrap_or_else(|| OsStr::new("config"))
+        .to_os_string();
+    file_name.push(suffix);
+    path.with_file_name(file_name)
+}
+
+fn create_temporary_file(path: &Path) -> Result<(File, PathBuf), ConfigError> {
+    ensure_parent(path)?;
+    loop {
+        let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let suffix = format!(".tmp-{}-{sequence}", std::process::id());
+        let temporary_path = sibling_path(path, &suffix);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&temporary_path) {
+            Ok(file) => {
+                #[cfg(unix)]
+                if let Err(error) = set_private_permissions(&file, &temporary_path) {
+                    drop(file);
+                    let _ = fs::remove_file(&temporary_path);
+                    return Err(error);
+                }
+                return Ok((file, temporary_path));
+            }
+            Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(source) => {
+                return Err(ConfigError::Write {
+                    path: path.to_path_buf(),
+                    source,
+                });
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn set_private_permissions(file: &File, path: &Path) -> Result<(), ConfigError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+        .map_err(|source| ConfigError::Write {
+            path: path.to_path_buf(),
+            source,
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::{Arc, Barrier},
+        thread,
+        time::Duration,
+    };
 
     fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
         let map: HashMap<String, String> = pairs
@@ -252,6 +402,16 @@ mod tests {
                 0o600
             );
         }
+        assert!(sibling_path(&path, ".lock").exists());
+        assert!(
+            std::fs::read_dir(path.parent().unwrap())
+                .unwrap()
+                .all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".tmp-"))
+        );
         assert!(matches!(
             cfg.add_client(human("me")),
             Err(ConfigError::DuplicateClient(_))
@@ -260,6 +420,154 @@ mod tests {
             Config::load_or_default(&dir.path().join("missing.toml")).unwrap(),
             Config::default()
         );
+    }
+
+    #[test]
+    fn concurrent_updates_keep_every_client() {
+        const UPDATE_COUNT: usize = 12;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut config = Config::default();
+        config.add_client(human("me")).unwrap();
+        config.save(&path).unwrap();
+
+        let path = Arc::new(path);
+        let barrier = Arc::new(Barrier::new(UPDATE_COUNT));
+        let handles: Vec<_> = (0..UPDATE_COUNT)
+            .map(|index| {
+                let path = Arc::clone(&path);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    Config::update(&path, |config| {
+                        thread::sleep(Duration::from_millis(2));
+                        config.add_client(ClientIdentity {
+                            name: format!("agent-{index}"),
+                            role: Role::Agent,
+                            default_scope: Some("cn".into()),
+                        })
+                    })
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap().unwrap();
+        }
+
+        let loaded = Config::load(&path).unwrap();
+        let names: HashSet<_> = loaded
+            .clients
+            .iter()
+            .map(|client| client.name.as_str())
+            .collect();
+        assert_eq!(names.len(), UPDATE_COUNT + 1);
+        assert!(names.contains("me"));
+        for index in 0..UPDATE_COUNT {
+            assert!(names.contains(format!("agent-{index}").as_str()));
+        }
+    }
+
+    #[test]
+    fn update_holds_sibling_lock_while_mutating() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut config = Config::default();
+        config.add_client(human("me")).unwrap();
+        config.save(&path).unwrap();
+
+        Config::update(&path, |config| {
+            let competing = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(sibling_path(&path, ".lock"))
+                .unwrap();
+            assert!(matches!(
+                competing.try_lock(),
+                Err(std::fs::TryLockError::WouldBlock)
+            ));
+            config.add_client(ClientIdentity {
+                name: "bot".into(),
+                role: Role::Agent,
+                default_scope: Some("cn".into()),
+            })
+        })
+        .unwrap();
+
+        let after = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(sibling_path(&path, ".lock"))
+            .unwrap();
+        after.try_lock().unwrap();
+    }
+
+    #[test]
+    fn create_holds_sibling_lock_before_initializing_and_rejects_existing_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config::default();
+        config
+            .create_with::<_, ConfigError>(&path, || {
+                let competing = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(sibling_path(&path, ".lock"))
+                    .unwrap();
+                assert!(matches!(
+                    competing.try_lock(),
+                    Err(std::fs::TryLockError::WouldBlock)
+                ));
+                assert!(!path.exists());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(Config::load(&path).unwrap(), config);
+
+        let original = fs::read(&path).unwrap();
+        let error = config
+            .create_with::<(), ConfigError>(&path, || panic!("must not initialize twice"))
+            .unwrap_err();
+        assert!(matches!(error, ConfigError::AlreadyExists(_)));
+        assert_eq!(fs::read(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn create_leaves_no_config_when_initializer_fails_and_releases_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config::default();
+        let error = config
+            .create_with::<(), ConfigError>(&path, || {
+                Err(ConfigError::Serialize("initializer failed".into()))
+            })
+            .unwrap_err();
+        assert!(matches!(error, ConfigError::Serialize(_)));
+        assert!(!path.exists());
+        config
+            .create_with::<_, ConfigError>(&path, || Ok(()))
+            .unwrap();
+    }
+
+    #[test]
+    fn create_does_not_clobber_config_created_without_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let error = Config::default()
+            .create_with::<_, ConfigError>(&path, || {
+                fs::write(&path, "existing config").unwrap();
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(matches!(error, ConfigError::AlreadyExists(_)));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "existing config");
+        assert!(fs::read_dir(dir.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".tmp-")
+        }));
     }
 
     #[test]

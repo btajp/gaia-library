@@ -20,7 +20,7 @@ pub struct Cli {
     /// 設定ファイルのパス（既定: $GAIA_CONFIG → ~/.config/gaia-library/config.toml）
     #[arg(long, global = true)]
     pub config: Option<PathBuf>,
-    /// 操作するクライアント名（既定: [cli].default_client）
+    /// 操作するクライアント名（init では作成する human 名。既定: [cli].default_client）
     #[arg(long, global = true)]
     pub client: Option<String>,
     /// 1 行 JSON で出力（既定は整形済み JSON）
@@ -38,7 +38,7 @@ pub struct InitArgs {
     #[arg(long)]
     pub identity: Option<String>,
     /// human クライアント名（既定: $USER）
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub client_name: Option<String>,
     /// DB パス（既定: ~/.local/share/gaia-library/gaia.db）
     #[arg(long)]
@@ -112,14 +112,19 @@ pub enum Command {
 pub fn run(cli: Cli) -> anyhow::Result<()> {
     let compact = cli.json;
     match &cli.command {
-        Command::Init(args) => app::init(args, cli.config.as_ref()),
+        Command::Init(args) => app::init(args, cli.config.as_ref(), cli.client.as_deref()),
         Command::Client { cmd } => {
             let path = app::resolve_config_path(cli.config.as_ref())?;
             admin_cmd::client(&path, cmd, compact)
         }
         Command::Serve(args) => {
+            let client = cli.client.as_deref().ok_or_else(|| {
+                gaia_core::error::ToolError::unauthorized(
+                    "stdio サーバーは接続主体を固定するため --client <name> が必須です",
+                )
+            })?;
             let app = app::App::open(cli.config.as_ref())?;
-            serve::serve(app, cli.client.as_deref(), args)
+            serve::serve(app, client, args)
         }
         Command::Affiliation { cmd } => {
             let app = app::App::open(cli.config.as_ref())?;
@@ -135,8 +140,11 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Call { tool, args } => {
             let app = app::App::open(cli.config.as_ref())?;
             let client = app.identity(cli.client.as_deref())?;
-            let value: serde_json::Value =
-                serde_json::from_str(args).map_err(|e| anyhow::anyhow!("--args は JSON: {e}"))?;
+            let value: serde_json::Value = serde_json::from_str(args).map_err(|e| {
+                gaia_core::error::ToolError::invalid_params(format!(
+                    "--args は JSON で指定する: {e}"
+                ))
+            })?;
             let out = app.call(&client, tool, value)?;
             app::print_json(&out, compact);
             Ok(())

@@ -10,11 +10,11 @@ pub struct ServeArgs {
     pub stdio: bool,
 }
 
-pub fn serve(app: App, cli_client: Option<&str>, args: &ServeArgs) -> anyhow::Result<()> {
+pub fn serve(app: App, client: &str, args: &ServeArgs) -> anyhow::Result<()> {
     if !args.stdio {
         anyhow::bail!("v0.1 は --stdio のみ対応です（HTTP は次のサブプロジェクトで追加）");
     }
-    let identity = app.identity(cli_client)?;
+    let identity = app.identity(Some(client))?;
     tracing::info!(client = %identity.name, role = %identity.role, "starting gaia_library over stdio");
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async move {

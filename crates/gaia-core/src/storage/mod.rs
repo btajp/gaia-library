@@ -1,6 +1,8 @@
 //! SQLite 接続・PRAGMA・マイグレーション。仕様書 §5。
 //! 内容層への SELECT は必ず `scope IN (SELECT value FROM json_each(?))` を付ける（各リポジトリの責務）。
-use std::{path::Path, sync::Mutex, time::Duration};
+#[cfg(unix)]
+use std::path::PathBuf;
+use std::{fs, path::Path, sync::Mutex, time::Duration};
 
 use rusqlite::{Connection, Transaction, TransactionBehavior};
 use rusqlite_migration::{M, Migrations};
@@ -24,6 +26,11 @@ pub enum StorageError {
     NotFound(String),
     #[error("{0}")]
     Integrity(String),
+    #[error("SQLite rejected journal_mode={expected}; actual mode is `{actual}`")]
+    JournalMode {
+        expected: &'static str,
+        actual: String,
+    },
 }
 
 impl From<StorageError> for ToolError {
@@ -44,12 +51,11 @@ pub struct Db {
 
 impl Db {
     pub fn open(path: &Path) -> Result<Self, StorageError> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
+        prepare_database_path(path)?;
         let mut conn = Connection::open(path)?;
-        configure(&mut conn)?;
+        configure(&mut conn, "wal")?;
         MIGRATIONS.to_latest(&mut conn)?;
+        secure_database_files(path)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -57,7 +63,7 @@ impl Db {
 
     pub fn open_in_memory() -> Result<Self, StorageError> {
         let mut conn = Connection::open_in_memory()?;
-        configure(&mut conn)?;
+        configure(&mut conn, "memory")?;
         MIGRATIONS.to_latest(&mut conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -88,6 +94,122 @@ impl Db {
         let out = f(&tx)?;
         tx.commit().map_err(StorageError::from)?;
         Ok(out)
+    }
+}
+
+fn prepare_database_path(path: &Path) -> Result<(), StorageError> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        create_private_directories(parent)?;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::{fs::OpenOptions, os::unix::fs::OpenOptionsExt};
+
+        // SQLite は WAL/SHM の作成 mode を本体 DB から導出するため、DB を先に 0600 で用意する。
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+        {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e.into()),
+        }
+        secure_database_files(path)?;
+    }
+
+    Ok(())
+}
+
+fn create_private_directories(path: &Path) -> Result<(), StorageError> {
+    if path.as_os_str().is_empty() {
+        return Ok(());
+    }
+
+    match create_private_directory(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            if path.is_dir() {
+                Ok(())
+            } else {
+                Err(e.into())
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if let Some(parent) = path.parent() {
+                create_private_directories(parent)?;
+            }
+            match create_private_directory(path) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
+                Err(e) => Err(e.into()),
+            }
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn create_private_directory(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700).create(path)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir(path)
+    }
+}
+
+fn secure_database_files(path: &Path) -> Result<(), StorageError> {
+    #[cfg(unix)]
+    {
+        // open 前は既存 sidecar、open 後は新規 sidecar を同じ関数で補正する。
+        set_private_file_permissions(path)?;
+        for suffix in ["-wal", "-shm"] {
+            set_private_file_permissions_if_exists(&sqlite_sidecar_path(path, suffix))?;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut sidecar = path.as_os_str().to_os_string();
+    sidecar.push(suffix);
+    PathBuf::from(sidecar)
+}
+
+#[cfg(unix)]
+fn set_private_file_permissions(path: &Path) -> Result<(), StorageError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = fs::metadata(path)?;
+    if !metadata.is_file() {
+        return Err(StorageError::Integrity(format!(
+            "database file is not a regular file: {}",
+            path.display()
+        )));
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_private_file_permissions_if_exists(path: &Path) -> Result<(), StorageError> {
+    match fs::metadata(path) {
+        Ok(_) => set_private_file_permissions(path),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -122,9 +244,18 @@ where
         .map_err(|e: T::Err| StorageError::Integrity(format!("invalid {what} `{raw}` in db: {e}")))
 }
 
-fn configure(conn: &mut Connection) -> Result<(), StorageError> {
-    // in-memory では "memory" が返るので戻り値は見ない
-    conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
+fn configure(
+    conn: &mut Connection,
+    expected_journal_mode: &'static str,
+) -> Result<(), StorageError> {
+    let actual: String =
+        conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))?;
+    if !actual.eq_ignore_ascii_case(expected_journal_mode) {
+        return Err(StorageError::JournalMode {
+            expected: expected_journal_mode,
+            actual,
+        });
+    }
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", true)?;
     conn.busy_timeout(Duration::from_millis(5000))?;
@@ -150,6 +281,13 @@ pub fn like_pattern(needle: &str) -> String {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn mode(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
     #[test]
     fn migrations_are_valid() {
         MIGRATIONS.validate().unwrap();
@@ -159,6 +297,8 @@ mod tests {
     fn open_in_memory_applies_schema_and_pragmas() {
         let db = Db::open_in_memory().unwrap();
         db.with_conn::<_, StorageError>(|c| {
+            let jm: String = c.pragma_query_value(None, "journal_mode", |r| r.get(0))?;
+            assert_eq!(jm, "memory");
             let fk: i64 = c.pragma_query_value(None, "foreign_keys", |r| r.get(0))?;
             assert_eq!(fk, 1);
             let n: i64 = c.query_one(
@@ -173,9 +313,25 @@ mod tests {
     }
 
     #[test]
+    fn configure_rejects_an_unexpected_journal_mode() {
+        let mut conn = Connection::open_in_memory().unwrap();
+
+        let err = configure(&mut conn, "wal").unwrap_err();
+
+        assert!(matches!(
+            err,
+            StorageError::JournalMode {
+                expected: "wal",
+                ref actual,
+            } if actual == "memory"
+        ));
+    }
+
+    #[test]
     fn open_file_uses_wal_creates_parent_and_sets_user_version() {
         let dir = tempfile::tempdir().unwrap();
-        let db = Db::open(&dir.path().join("sub").join("gaia.db")).unwrap();
+        let db_path = dir.path().join("sub").join("private").join("gaia.db");
+        let db = Db::open(&db_path).unwrap();
         db.with_conn::<_, StorageError>(|c| {
             let jm: String = c.pragma_query_value(None, "journal_mode", |r| r.get(0))?;
             assert_eq!(jm, "wal");
@@ -184,9 +340,54 @@ mod tests {
             Ok(())
         })
         .unwrap();
+        #[cfg(unix)]
+        {
+            assert_eq!(mode(db_path.parent().unwrap()), 0o700);
+            assert_eq!(mode(&dir.path().join("sub")), 0o700);
+            assert_eq!(mode(&db_path), 0o600);
+            assert_eq!(mode(&sqlite_sidecar_path(&db_path, "-wal")), 0o600);
+            assert_eq!(mode(&sqlite_sidecar_path(&db_path, "-shm")), 0o600);
+        }
         // 2 回目の open は冪等
         drop(db);
-        Db::open(&dir.path().join("sub").join("gaia.db")).unwrap();
+        Db::open(&db_path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_file_secures_existing_database_without_changing_existing_parent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("shared");
+        fs::create_dir(&parent).unwrap();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+        let db_path = parent.join("gaia.db");
+        fs::write(&db_path, []).unwrap();
+        fs::set_permissions(&db_path, fs::Permissions::from_mode(0o644)).unwrap();
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = sqlite_sidecar_path(&db_path, suffix);
+            fs::write(&sidecar, []).unwrap();
+            fs::set_permissions(&sidecar, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        prepare_database_path(&db_path).unwrap();
+
+        assert_eq!(mode(&parent), 0o755);
+        assert_eq!(mode(&db_path), 0o600);
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = sqlite_sidecar_path(&db_path, suffix);
+            assert_eq!(mode(&sidecar), 0o600);
+            fs::remove_file(sidecar).unwrap();
+        }
+
+        let db = Db::open(&db_path).unwrap();
+
+        assert_eq!(mode(&parent), 0o755);
+        assert_eq!(mode(&db_path), 0o600);
+        assert_eq!(mode(&sqlite_sidecar_path(&db_path, "-wal")), 0o600);
+        assert_eq!(mode(&sqlite_sidecar_path(&db_path, "-shm")), 0o600);
+        drop(db);
     }
 
     #[test]

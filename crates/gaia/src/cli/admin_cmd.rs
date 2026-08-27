@@ -1,7 +1,6 @@
 //! 管理系: affiliation（DB・audit 付き）と client（設定ファイル）。提案キュー原則の例外はここだけ。
 use std::path::Path;
 
-use anyhow::bail;
 use clap::Subcommand;
 use serde_json::json;
 
@@ -44,12 +43,15 @@ pub fn affiliation(
     cmd: &AffiliationCmd,
     compact: bool,
 ) -> anyhow::Result<()> {
+    let actor = app.identity(cli_client)?;
+    if actor.role != Role::Human {
+        return Err(gaia_core::error::ToolError::unauthorized(
+            "affiliation の管理は human クライアントのみ（--client を確認）",
+        )
+        .into());
+    }
     match cmd {
         AffiliationCmd::Add { name, identity } => {
-            let actor = app.identity(cli_client)?;
-            if actor.role != Role::Human {
-                bail!("affiliation の管理は human クライアントのみ（--client を確認）");
-            }
             let id = gaia_core::admin::add_affiliation(
                 app.service.db(),
                 &actor.name,
@@ -71,22 +73,25 @@ pub fn affiliation(
 }
 
 pub fn client(config_path: &Path, cmd: &ClientCmd, compact: bool) -> anyhow::Result<()> {
-    let mut config = Config::load(config_path)?;
     match cmd {
         ClientCmd::Add {
             name,
             role,
             default_scope,
         } => {
-            config.add_client(ClientIdentity {
-                name: name.clone(),
-                role: *role,
-                default_scope: default_scope.clone(),
+            Config::update(config_path, |config| {
+                config.add_client(ClientIdentity {
+                    name: name.clone(),
+                    role: *role,
+                    default_scope: default_scope.clone(),
+                })
             })?;
-            config.save(config_path)?;
             eprintln!("クライアント `{name}` を追加しました（role={role}）");
         }
-        ClientCmd::List => print_json(&serde_json::to_value(&config.clients)?, compact),
+        ClientCmd::List => {
+            let config = Config::load(config_path)?;
+            print_json(&serde_json::to_value(&config.clients)?, compact);
+        }
     }
     Ok(())
 }

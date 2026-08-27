@@ -1,9 +1,11 @@
 //! 提案系コマンド。`add *` は human 向けに「提案＋即時承認」を 1 コマンド化したもの。
-use anyhow::Context;
 use clap::{Args, Subcommand};
 use serde_json::{Value, json};
 
-use gaia_core::identity::{ClientIdentity, Role};
+use gaia_core::{
+    error::ToolError,
+    identity::{ClientIdentity, Role},
+};
 
 use super::app::{App, print_json};
 
@@ -156,7 +158,8 @@ pub fn propose(
     args: &ProposeArgs,
     compact: bool,
 ) -> anyhow::Result<()> {
-    let patch: Value = serde_json::from_str(&args.patch).context("--patch は JSON で指定する")?;
+    let patch: Value = serde_json::from_str(&args.patch)
+        .map_err(|e| ToolError::invalid_params(format!("--patch は JSON で指定する: {e}")))?;
     let mut payload = json!({
         "target_type": args.target_type,
         "action": args.action,
@@ -171,8 +174,9 @@ pub fn propose(
         payload["scope"] = json!(s);
     }
     if let Some(p) = &args.provenance {
-        payload["provenance"] =
-            serde_json::from_str(p).context("--provenance は JSON で指定する")?;
+        payload["provenance"] = serde_json::from_str(p).map_err(|e| {
+            ToolError::invalid_params(format!("--provenance は JSON で指定する: {e}"))
+        })?;
     }
     print_json(&app.call(client, "propose_update", payload)?, compact);
     Ok(())
@@ -200,7 +204,10 @@ pub fn proposals(
 
 pub fn add(app: &App, client: &ClientIdentity, cmd: &AddCmd, compact: bool) -> anyhow::Result<()> {
     if client.role != Role::Human {
-        anyhow::bail!("`gaia add` は human クライアント専用（agent は `gaia propose` で提案する）");
+        return Err(ToolError::unauthorized(
+            "`gaia add` は human クライアント専用（agent は `gaia propose` で提案する）",
+        )
+        .into());
     }
     let (target_type, patch, kind, scope) = match cmd {
         AddCmd::Person {
@@ -313,11 +320,37 @@ pub fn add(app: &App, client: &ClientIdentity, cmd: &AddCmd, compact: bool) -> a
         payload["scope"] = json!(s);
     }
     let proposed = app.call(client, "propose_update", payload)?;
-    let approved = app.call(
-        client,
-        "approve_proposal",
-        json!({"proposal_id": proposed["proposal_id"]}),
-    )?;
+    let proposal_id = proposed["proposal_id"]
+        .as_i64()
+        .ok_or_else(|| ToolError::internal("propose_update の応答に proposal_id がありません"))?;
+    let approved = app
+        .call(
+            client,
+            "approve_proposal",
+            json!({"proposal_id": proposal_id}),
+        )
+        .map_err(|mut error| {
+            error.details = Some(match error.details.take() {
+                Some(Value::Object(mut details)) => {
+                    details.insert("proposal_id".to_string(), json!(proposal_id));
+                    details.insert("phase".to_string(), json!("approve"));
+                    details.insert("proposal_created".to_string(), json!(true));
+                    Value::Object(details)
+                }
+                Some(details) => json!({
+                    "proposal_id": proposal_id,
+                    "phase": "approve",
+                    "proposal_created": true,
+                    "cause": details,
+                }),
+                None => json!({
+                    "proposal_id": proposal_id,
+                    "phase": "approve",
+                    "proposal_created": true,
+                }),
+            });
+            error
+        })?;
     print_json(&approved, compact);
     Ok(())
 }

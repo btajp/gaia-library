@@ -81,13 +81,7 @@ fn setup(dir: &std::path::Path) {
             String::from_utf8_lossy(&out.stderr)
         );
     };
-    run(&[
-        "init",
-        "--affiliation",
-        "cloudnative",
-        "--client-name",
-        "tester",
-    ]);
+    run(&["init", "--affiliation", "cloudnative", "--client", "tester"]);
     run(&[
         "client",
         "add",
@@ -185,4 +179,21 @@ fn human_sees_approval_tools() {
         .collect();
     assert!(names.contains(&"approve_proposal"));
     assert!(names.contains(&"reject_proposal"));
+}
+
+#[test]
+fn stdio_requires_explicit_client_even_with_default_human() {
+    let dir = tempfile::tempdir().unwrap();
+    setup(dir.path());
+    let out = Command::new(env!("CARGO_BIN_EXE_gaia"))
+        .args(["--json", "serve", "--stdio"])
+        .env("GAIA_CONFIG", dir.path().join("config.toml"))
+        .env("GAIA_DB", dir.path().join("gaia.db"))
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(out.stdout.is_empty());
+    let error: serde_json::Value = serde_json::from_slice(&out.stderr).unwrap();
+    assert_eq!(error["code"], "unauthorized");
+    assert!(error["message"].as_str().unwrap().contains("--client"));
 }

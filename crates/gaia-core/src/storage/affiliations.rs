@@ -40,6 +40,22 @@ pub fn exists(conn: &Connection, name: &str) -> Result<bool, StorageError> {
     Ok(found.is_some())
 }
 
+pub fn find_by_name(conn: &Connection, name: &str) -> Result<Option<Affiliation>, StorageError> {
+    Ok(conn
+        .query_row(
+            "SELECT id, name, identity FROM affiliations WHERE name = ?1",
+            params![name],
+            |r| {
+                Ok(Affiliation {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    identity: r.get(2)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
 pub fn list(conn: &Connection) -> Result<Vec<Affiliation>, StorageError> {
     let mut stmt = conn.prepare("SELECT id, name, identity FROM affiliations ORDER BY name")?;
     let rows = stmt.query_map([], |r| {
