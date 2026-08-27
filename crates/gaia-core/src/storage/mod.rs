@@ -91,6 +91,9 @@ impl Db {
     }
 }
 
+pub mod affiliations;
+pub mod audit;
+
 fn configure(conn: &mut Connection) -> Result<(), StorageError> {
     // in-memory では "memory" が返るので戻り値は見ない
     conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
