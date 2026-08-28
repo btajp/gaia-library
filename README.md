@@ -32,6 +32,8 @@ gaia serve --http
 
 キーは設定の保存成功後に stdout へ一度だけ表示します。narumi では「Gaia 接続」の API キー欄に入力します。設定ファイルには SHA-256 ハッシュだけを保存するため、平文キーを失った場合は `gaia client keygen narumi` で再発行します。サーバーは認証ごとに設定を読み直すので、再起動せず旧キーが失効します。`--json` で発行すると、キーを含む JSON を stdout へ返します。これらの出力をログや公開ファイルへ保存しないでください。
 
+設定の検証は fail-closed です。`[keys]` に 1 件でも不正なハッシュ（64 桁の hex 以外）、`[[clients]]` に無いクライアント名、別クライアントと重複するハッシュがあると設定全体の読み込みが失敗し、HTTP 認証はすべてのクライアントで拒否され、`gaia client keygen` / `gaia client add` も失敗します。復旧するには、エラーに表示されたクライアントの行を設定ファイルの `[keys]` から手で削除し、`gaia client keygen <name>` で再発行してください。
+
 サーバーは `127.0.0.1` のみに bind します。ポート未指定時は設定の `server.port`、それもなければ 4111〜4114 の順で使用可能なポートを探します。`--port N` で固定、`--port 0` で空きポートを選択できます。起動した URL は通常 stderr、`gaia --json serve --http --port 0` では stdout の `{"status":"listening","url":"..."}` で確認できます。
 
 すべての HTTP リクエストで `Authorization: Bearer <key>` が必要です。MCP セッションはクライアント名に結び付け、別クライアントによる応答の再取得・操作・削除を拒否します。同じクライアントのキー再発行ではセッションを引き継げます。HTTP の `--client` 指定は不要で、各リクエストのキーから役割と scope を解決します。HTTP でも承認・却下は human のみです。
@@ -120,7 +122,7 @@ CLI のリンクは設定画面の明示操作で `~/.local/bin/gaia` に作成�
 - Cargo workspace、desktop、Tauri 設定、CHANGELOG の版数をそろえ、対象タグを未使用にする。
 
 ```sh
-./scripts/release-desktop.sh 0.1.0
+./scripts/release-desktop.sh <version>   # 例: CHANGELOG と Cargo / Tauri 設定でそろえた版数
 ```
 
 スクリプトはビルド・テスト、Developer ID 署名、公証、updater 署名を確認し、5 個の配布ファイルを draft に添付してから公開する。ローカル `.app` の生成だけではリリース完了にならない。

@@ -309,7 +309,7 @@ Expected: `gaia 0.1.0`
 
 ## 開発ルール
 - テスト: `cargo test --workspace`。lint: `cargo fmt --all --check` と `cargo clippy --workspace --all-targets -- -D warnings`
-- `scripts/dev.sh` は narumi をサブプロセス起動する（NARUMI_BIN 未設定ならスキップ）。narumi 無しでも全テストが通ること（任意依存）
+- `scripts/dev.sh` は narumi の HTTP server をサブプロセス起動する（`NARUMI_BIN` 未設定ならスキップ、port は `NARUMI_PORT`、既定 8765）。narumi 無しでも全テストが通ること（任意依存）
 - 契約の書き方: `contracts/tools/<name>.json` は MCP の Tool オブジェクト 1 つ。共通型は `../defs/common.json#/$defs/X` で参照。`minLength` / `minimum` / `maximum` / `pattern` / `format` / `if` / `prefixItems` は使わない（typify の制約）。enum は必ず `$defs` に定義する
 - FTS: `INSERT OR REPLACE` 禁止（`ON CONFLICT DO UPDATE` を使う）。同期はトリガで行う
 - 検索は person_aliases の完全一致（正規化済み別行）＋ facts_fts（trigram。3 文字未満は LIKE）の併用
@@ -363,22 +363,28 @@ jobs:
       - run: cargo test --workspace
 ```
 
-`scripts/dev.sh`（`chmod +x`）:
+`scripts/dev.sh`（`chmod +x`）。narumi の実 CLI は `narumi-server --http --port <N>`（`--stdio` もある）で、`serve` サブコマンドは無い。`exec` にすると EXIT trap が走らず narumi が残るため、cargo を通常起動して終了時に kill / wait する:
 
 ```bash
 #!/usr/bin/env bash
-# narumi をサブプロセス起動してから gaia を実行する開発用スクリプト。
+# narumi の HTTP server をサブプロセス起動してから gaia を実行する開発用スクリプト。
 # narumi は任意依存: NARUMI_BIN が未設定または実行不可ならスキップして続行する。
 set -euo pipefail
 if [[ -n "${NARUMI_BIN:-}" && -x "${NARUMI_BIN}" ]]; then
-  "${NARUMI_BIN}" serve --stdio &
+  "${NARUMI_BIN}" --http --port "${NARUMI_PORT:-8765}" &
   NARUMI_PID=$!
-  trap 'kill "${NARUMI_PID}" 2>/dev/null || true' EXIT
-  echo "narumi started (pid ${NARUMI_PID})" >&2
-else
+  cleanup() {
+    kill "${NARUMI_PID}" 2>/dev/null || true
+    wait "${NARUMI_PID}" 2>/dev/null || true
+  }
+  trap cleanup EXIT
+  echo "narumi HTTP server started (pid ${NARUMI_PID}, port ${NARUMI_PORT:-8765})" >&2
+elif [[ -z "${NARUMI_BIN:-}" ]]; then
   echo "narumi not found (NARUMI_BIN unset); continuing without it" >&2
+else
+  echo "narumi not executable (NARUMI_BIN is set); continuing without it" >&2
 fi
-exec cargo run -p gaia -- "$@"
+cargo run -p gaia -- "$@"
 ```
 
 - [ ] **Step 7: lint とテストを通す**
