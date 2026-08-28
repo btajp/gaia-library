@@ -53,6 +53,7 @@
 - `desktop/build-app.sh` は UI と host target の CLI をビルドして同梱する。初回はこの処理の後で `desktop/src-tauri` の build / fmt / clippy / test を実行する
 - データ変更は `ToolService` の提案・承認経由。設定と affiliations 管理だけを専用 commands に置く。設定ファイルを都度読み直し、アプリ内の設定更新・初回設定・終了処理を直列化する
 - 設定ファイルの新規公開は `Config::create_with`、更新は `Config::update` を使う（設定ファイルの隣の `.lock` で CLI の `gaia init` / `gaia client` とも直列化する）。`Config::load` → 変更 → `save` の直書きはしない。ロックを通らない直接編集は直列化の対象外
+- 設定ファイルが symlink の場合はリンクを残してリンク先（最大 40 段）を置換し、`.lock` と一時ファイルはリンク先の隣に作る。他ユーザー所有の symlink は辿らない。`.lock` が symlink なら開かない。拒否する操作（既存パスへの `create_with`、到達不能な設定への `update`）はリンク先のディレクトリや `.lock` を作らない。設定ファイル（リンク先を含む）は本人だけが書けるディレクトリに置く
 - 平文 API キーは Keychain を優先し、失敗時のみ 0700 ディレクトリ内の 0600 ファイルへ保存する。現在の設定ハッシュと一致しない保管キーは接続設定へ出さない。キー・スニペットをログや localStorage に保存しない
 - CLI リンクは設定画面からの明示操作のみ。新設と確認済みリンクの置換を区別し、確認したリンク先との一致を実行時・退避後にも検査する。通常ファイルを上書きせず、競合時は元の項目または復旧用の退避物を残す
 - updater 秘密鍵 `~/.tauri/gaia-library-updater.key` は上書き禁止・バックアップ必須。公開鍵だけを Tauri 設定に含める
