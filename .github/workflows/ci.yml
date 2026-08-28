@@ -3,6 +3,8 @@ on:
   push:
     branches: [main]
   pull_request:
+permissions:
+  contents: read
 jobs:
   test:
     strategy:
@@ -16,6 +18,79 @@ jobs:
           toolchain: "1.95.0"
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --locked
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+  desktop:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]] || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            echo "required=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- desktop crates contracts scripts Cargo.toml Cargo.lock toolchain.json .github/workflows/ci.yml; then
+            echo "required=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "required=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.changes.outputs.required == 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # rust-toolchain.toml と同じ版・components に固定する
+          toolchain: "1.95.0"
+          components: rustfmt, clippy
+      - if: steps.changes.outputs.required == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            desktop/src-tauri
+      - if: steps.changes.outputs.required == 'true'
+        id: toolchain
+        shell: bash
+        run: |
+          node -e 'const t = require("./toolchain.json"); console.log("bun=" + t.bun + "\ntauri=" + t.tauriCli)' >> "$GITHUB_OUTPUT"
+      - if: steps.changes.outputs.required == 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ steps.toolchain.outputs.bun }}
+      - if: steps.changes.outputs.required == 'true'
+        env:
+          TAURI_CLI_VERSION: ${{ steps.toolchain.outputs.tauri }}
+        run: cargo install tauri-cli --version "$TAURI_CLI_VERSION" --locked
+      - if: steps.changes.outputs.required == 'true'
+        run: ./desktop/build-app.sh
+      - if: steps.changes.outputs.required == 'true'
+        working-directory: desktop/src-tauri
+        run: cargo build --all-features --locked
+      - if: steps.changes.outputs.required == 'true'
+        working-directory: desktop/src-tauri
+        run: cargo fmt --check
+      - if: steps.changes.outputs.required == 'true'
+        working-directory: desktop/src-tauri
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - if: steps.changes.outputs.required == 'true'
+        working-directory: desktop/src-tauri
+        run: cargo test --all-features --locked
+      - if: steps.changes.outputs.required == 'true'
+        working-directory: desktop/ui
+        run: bun test
+      - if: steps.changes.outputs.required == 'true'
+        run: bun test scripts
+      - if: steps.changes.outputs.required == 'true'
+        working-directory: desktop/src-tauri
+        run: |
+          cargo tauri build --bundles app --no-sign --ci
+          test ! -e target/release/bundle/macos/gaia-library.app/Contents/MacOS/verify-updater-signature
+      - if: steps.changes.outputs.required != 'true'
+        run: echo "desktop 関連の変更がないためスキップ"

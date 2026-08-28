@@ -368,3 +368,49 @@ fn unicode_client_names_authenticate_over_http_without_changing_identity() {
     #[cfg(unix)]
     server.shutdown();
 }
+
+#[test]
+fn generated_key_for_japanese_client_initializes_http_as_original_client() {
+    let dir = tempfile::tempdir().unwrap();
+    cli_ok(
+        dir.path(),
+        &[
+            "init",
+            "--affiliation",
+            "cloudnative",
+            "--client-name",
+            "tester",
+        ],
+    );
+    let client_name = "議事録クライアント";
+    let key = cli_ok(
+        dir.path(),
+        &[
+            "client",
+            "add",
+            client_name,
+            "--role",
+            "agent",
+            "--default-scope",
+            "cloudnative",
+            "--generate-key",
+        ],
+    );
+    assert!(key.bytes().all(|byte| byte.is_ascii_graphic()));
+    assert_eq!(key.lines().count(), 1);
+    let server = HttpServer::start(dir.path());
+    let mut client = Rpc::new(&server.url, Some(&key));
+    client.initialize();
+    let info = client.request(
+        2,
+        "tools/call",
+        json!({
+            "name": "get_server_info", "arguments": {}
+        }),
+    );
+    assert_eq!(info["result"]["isError"], false);
+    let identity = &info["result"]["structuredContent"]["client"];
+    assert_eq!(identity["name"], client_name);
+    assert_eq!(identity["role"], "agent");
+    assert_eq!(identity["default_scope"], "cloudnative");
+}
