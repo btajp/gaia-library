@@ -3,7 +3,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{self, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -14,6 +14,8 @@ use crate::identity::{ClientIdentity, Role};
 
 pub const APP_DIR: &str = "gaia-library";
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+/// 保存先の symlink 鎖を辿る上限。超えたらループとみなして保存を拒否する。
+const MAX_SYMLINK_DEPTH: usize = 40;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -187,13 +189,20 @@ impl Config {
         self.validate()?;
         let text =
             toml::to_string_pretty(self).map_err(|e| ConfigError::Serialize(e.to_string()))?;
-        let (mut temporary, temporary_path) = create_temporary_file(path)?;
+        // rename は symlink 自体を通常ファイルへ置き換えるため、鎖を辿った最終ターゲットを置換先にする。
+        // 一時ファイルも同じディレクトリに作り、rename が同一ファイルシステム内で完結するようにする。
+        let destination = if replace {
+            resolve_write_target(path)?
+        } else {
+            path.to_path_buf()
+        };
+        let (mut temporary, temporary_path) = create_temporary_file(&destination)?;
         let result = (|| {
             temporary.write_all(text.as_bytes())?;
             temporary.sync_all()?;
             drop(temporary);
             if replace {
-                fs::rename(&temporary_path, path)
+                fs::rename(&temporary_path, &destination)
             } else {
                 // hard link の公開は既存パス（dangling symlink を含む）を置き換えない。
                 fs::hard_link(&temporary_path, path)
@@ -292,9 +301,13 @@ struct ConfigFileLock {
 }
 
 impl ConfigFileLock {
+    /// lock file は symlink の別名ではなく解決後のターゲットの兄弟に置き、
+    /// 別名経由の並行更新も同じ lock で直列化する。
     fn acquire(config_path: &Path) -> Result<Self, ConfigError> {
         ensure_parent(config_path)?;
-        let lock_path = sibling_path(config_path, ".lock");
+        let target = resolve_write_target(config_path)?;
+        ensure_parent(&target)?;
+        let lock_path = sibling_path(&target, ".lock");
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true);
         #[cfg(unix)]
@@ -328,6 +341,35 @@ fn ensure_parent(path: &Path) -> Result<(), ConfigError> {
         })?;
     }
     Ok(())
+}
+
+/// 保存先が symlink の場合はリンクを残し、鎖を辿った最終ターゲット（未作成でもよい）を返す。
+/// 上限を超える鎖（ループを含む）や読めないリンクは `Write` エラーとして報告する。
+fn resolve_write_target(path: &Path) -> Result<PathBuf, ConfigError> {
+    let write_error = |source: io::Error| ConfigError::Write {
+        path: path.to_path_buf(),
+        source,
+    };
+    let mut target = path.to_path_buf();
+    for _ in 0..MAX_SYMLINK_DEPTH {
+        match fs::symlink_metadata(&target) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                let link = fs::read_link(&target).map_err(write_error)?;
+                target = if link.is_absolute() {
+                    link
+                } else {
+                    target.parent().unwrap_or_else(|| Path::new(".")).join(link)
+                };
+            }
+            Ok(_) => return Ok(target),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(target),
+            Err(error) => return Err(write_error(error)),
+        }
+    }
+    Err(write_error(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("too many levels of symbolic links (more than {MAX_SYMLINK_DEPTH})"),
+    )))
 }
 
 fn sibling_path(path: &Path, suffix: &str) -> PathBuf {
