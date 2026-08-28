@@ -212,7 +212,7 @@ mod tests {
     fn embedded_catalog_loads_all_tools() {
         let c = Catalog::embedded().expect("catalog");
         assert_eq!(c.server_name, "gaia_library");
-        assert_eq!(c.contract_version, "1.0.0");
+        assert_eq!(c.contract_version, "1.1.0");
         assert!(c.get("get_server_info").is_some());
         assert!(c.get("get_job_status").is_some());
         assert!(c.get("nope").is_none());
@@ -284,8 +284,8 @@ mod tests {
         assert!(!agent.contains(&"approve_proposal"));
         assert!(!agent.contains(&"reject_proposal"));
         assert!(
-            !agent.contains(&"resolve_source"),
-            "disabled tool must not be visible"
+            agent.contains(&"resolve_source"),
+            "enabled tool must be visible (v0.2.0)"
         );
         let human: Vec<&str> = c
             .visible(Role::Human)
@@ -293,7 +293,7 @@ mod tests {
             .map(|t| t.name.as_str())
             .collect();
         assert!(human.contains(&"approve_proposal"));
-        assert_eq!(human.len(), 12);
+        assert_eq!(human.len(), 13);
     }
 
     #[test]

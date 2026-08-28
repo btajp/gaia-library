@@ -100,6 +100,25 @@ pub fn get(
     raw.map(convert).transpose()
 }
 
+/// uri の完全一致（バイト比較。LIKE は使わない）で実効 scope 内の最新 1 件（id 最大）。
+pub fn latest_by_uri(
+    conn: &Connection,
+    uri: &str,
+    scopes: &ScopeSet,
+) -> Result<Option<Reference>, StorageError> {
+    let raw = conn
+        .query_row(
+            &format!(
+                "SELECT {COLS} FROM refs WHERE uri = ?1 AND scope IN (SELECT value FROM json_each(?2)) \
+                 ORDER BY id DESC LIMIT 1"
+            ),
+            params![uri, scopes.as_json()],
+            raw_row,
+        )
+        .optional()?;
+    raw.map(convert).transpose()
+}
+
 pub fn for_target(
     conn: &Connection,
     target_type: &str,

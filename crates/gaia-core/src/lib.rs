@@ -9,5 +9,6 @@ pub mod domain;
 pub mod error;
 pub mod identity;
 pub mod scope;
+pub mod sources;
 pub mod storage;
 pub mod tools;

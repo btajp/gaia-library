@@ -19,6 +19,12 @@ pub fn handle(
         .iter()
         .map(|t| t.name.clone())
         .collect();
+    // 設定済みで利用できる解決器名のみ（コマンドやパスは出さない）。設定が読めなければ空。
+    let resolvers = ctx
+        .sources
+        .settings()
+        .map(|settings| ctx.sources.ready_systems(&settings))
+        .unwrap_or_default();
     Ok(GetServerInfoOutput {
         name: ctx.catalog.server_name.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -28,7 +34,7 @@ pub fn handle(
         },
         capabilities: ServerCapabilitiesInfo {
             tools,
-            resolvers: Vec::new(),
+            resolvers,
             search: SearchCapabilities {
                 fts: "trigram".to_string(),
             },

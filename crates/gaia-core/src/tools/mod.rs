@@ -6,6 +6,7 @@ mod get_organization;
 mod get_person;
 mod job_status;
 mod propose;
+mod resolve_source;
 mod resolve_speakers;
 mod search_context;
 mod server_info;
@@ -17,6 +18,7 @@ use crate::{
     contracts::{Catalog, ToolSpec},
     error::ToolError,
     identity::{ClientIdentity, Role},
+    sources::SourceRegistry,
     storage::Db,
 };
 
@@ -33,23 +35,37 @@ pub const HANDLED_TOOLS: &[&str] = &[
     "get_engagement",
     "get_glossary",
     "resolve_speakers",
+    "resolve_source",
     "search_context",
 ];
 
 pub struct ToolService {
     db: Db,
     catalog: Catalog,
+    sources: SourceRegistry,
 }
 
 pub struct CallContext<'a> {
     pub client: &'a ClientIdentity,
     pub db: &'a Db,
     pub catalog: &'a Catalog,
+    pub sources: &'a SourceRegistry,
 }
 
 impl ToolService {
+    /// 解決器なし（`SourceRegistry::empty()`）。resolve_source は全参照で `resolved=false` を返す。
     pub fn new(db: Db, catalog: Catalog) -> Self {
-        Self { db, catalog }
+        Self {
+            db,
+            catalog,
+            sources: SourceRegistry::empty(),
+        }
+    }
+
+    /// resolve_source の解決器を注入する（CLI / desktop は `gaia_mcp::sources::registry` の結果を渡す）。
+    pub fn with_sources(mut self, sources: SourceRegistry) -> Self {
+        self.sources = sources;
+        self
     }
 
     pub fn catalog(&self) -> &Catalog {
@@ -58,6 +74,10 @@ impl ToolService {
 
     pub fn db(&self) -> &Db {
         &self.db
+    }
+
+    pub fn sources(&self) -> &SourceRegistry {
+        &self.sources
     }
 
     pub fn visible_tools(&self, role: Role) -> Vec<&ToolSpec> {
@@ -87,6 +107,7 @@ impl ToolService {
             client,
             db: &self.db,
             catalog: &self.catalog,
+            sources: &self.sources,
         };
         let out = dispatch(&ctx, tool, args)?;
         if cfg!(any(test, debug_assertions)) {
@@ -109,6 +130,7 @@ fn dispatch(ctx: &CallContext<'_>, tool: &str, args: Value) -> Result<Value, Too
         "get_engagement" => run(ctx, args, get_engagement::handle),
         "get_glossary" => run(ctx, args, get_glossary::handle),
         "resolve_speakers" => run(ctx, args, resolve_speakers::handle),
+        "resolve_source" => run(ctx, args, resolve_source::handle),
         "search_context" => run(ctx, args, search_context::handle),
         other => Err(ToolError::not_implemented(format!(
             "tool `{other}` has no handler yet"
@@ -279,7 +301,7 @@ mod tests {
         let s = service();
         let out = s.call(&agent(), "get_server_info", json!({})).unwrap();
         assert_eq!(out["name"], "gaia_library");
-        assert_eq!(out["contract_version"], "1.0.0");
+        assert_eq!(out["contract_version"], "1.1.0");
         assert_eq!(out["protocol"]["transports"], json!(["stdio", "http"]));
         assert_eq!(out["client"]["role"], "agent");
         assert_eq!(out["client"]["default_scope"], "cn");
@@ -311,8 +333,8 @@ mod tests {
             s.call(&agent(), "resolve_source", json!({}))
                 .unwrap_err()
                 .code,
-            ErrorCode::NotFound,
-            "disabled = 存在しない扱い"
+            ErrorCode::InvalidParams,
+            "登録済み: ref_id も uri も無い呼び出しは入力違反"
         );
         assert_eq!(
             s.call(&agent(), "approve_proposal", json!({"proposal_id": 1}))
