@@ -42,7 +42,8 @@
 
 - キー発行: `gaia client add <name> --role agent --default-scope <scope> --generate-key` または `gaia client keygen <name>`。平文は stdout に 1 行、config の `[keys]` にはハッシュのみ保存する
 - 起動: `gaia serve --http --port <N>`。未指定時は `[server].port`、それもなければ 4111〜4114 を試す。`--port 0` は空きポートを選ぶ
-- 設定出力: `gaia client mcp-config <name> --transport http --key <key> --port <N>`。現在のキーと固定・非ゼロポートが必要で、起動側と同じポートを使う。stdio の設定出力は使用中の config / DB の絶対パスを含む
+- キー平文は `gaia_<接頭辞>_<32 桁 hex>`。接頭辞はクライアント名から Bearer token に使える ASCII（英数字と `-._~+/`）だけを残した最大 64 文字（空なら `client`）で、識別には使わずハッシュ照合だけで行う。元のクライアント名は変更しない
+- 設定出力: `gaia client mcp-config <name> --transport http --port <N> --key-stdin`（キーは標準入力で渡す。互換用の `--key <key>` は履歴・プロセス引数へ露出するため非推奨）。現在のキーと固定・非ゼロポートが必要で、起動側と同じポートを使う。stdio の設定出力は使用中の config / DB の絶対パスを含む
 - CLI の HTTP サーバーは `AuthTable::from_path` を使い、設定をリクエストごとに読み直す。再発行後は次のリクエストから旧キーを拒否し、読み込み失敗時も認証を拒否する。受理済みリクエストは強制終了しない
 - human キーは既定で発行しない。接続設定に含まれる平文キーはコミットしない
 
@@ -50,6 +51,7 @@
 
 - `desktop/build-app.sh` は UI と host target の CLI をビルドして同梱する。初回はこの処理の後で `desktop/src-tauri` の build / fmt / clippy / test を実行する
 - データ変更は `ToolService` の提案・承認経由。設定と affiliations 管理だけを専用 commands に置く。設定ファイルを都度読み直し、アプリ内の設定更新・初回設定・終了処理を直列化する
+- 設定ファイルの新規公開は `Config::create_with`、更新は `Config::update` を使う（設定ファイルの隣の `.lock` で CLI の `gaia init` / `gaia client` とも直列化する）。`Config::load` → 変更 → `save` の直書きはしない。ロックを通らない直接編集は直列化の対象外
 - 平文 API キーは Keychain を優先し、失敗時のみ 0700 ディレクトリ内の 0600 ファイルへ保存する。現在の設定ハッシュと一致しない保管キーは接続設定へ出さない。キー・スニペットをログや localStorage に保存しない
 - CLI リンクは設定画面からの明示操作のみ。新設と確認済みリンクの置換を区別し、確認したリンク先との一致を実行時・退避後にも検査する。通常ファイルを上書きせず、競合時は元の項目または復旧用の退避物を残す
 - updater 秘密鍵 `~/.tauri/gaia-library-updater.key` は上書き禁止・バックアップ必須。公開鍵だけを Tauri 設定に含める

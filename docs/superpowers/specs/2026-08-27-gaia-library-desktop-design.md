@@ -66,6 +66,7 @@ CHANGELOG.md                     # Keep a Changelog。リリースノートの�
 - 多重起動: single-instance plugin により 2 個目は既存ウィンドウを表示する。ポートの候補が複数あるため、bind 失敗を多重起動の検知には使わない
 - ウィンドウを閉じる操作は非表示にするだけ。トレイ・Dock から復帰し、アプリの終了操作で HTTP を停止する
 - 初回設定と設定更新は終了処理と直列化する。IPC の待機が取り消されても、進行中の保存を完了してから終了する
+- 設定ファイルの新規公開は `Config::create_with`、更新は `Config::update` を使い、設定ファイルの隣の `.lock` で CLI（`gaia init` / `gaia client …`）とも直列化する。`load` → 変更 → `save` の直書きはしない
 - アプリ非起動時もエージェントは stdio（`gaia serve --stdio --client <name>`）で従来どおり動く（任意依存の原則）
 
 ## 5. Tauri commands（すべて薄い写し。特権経路を作らない）
@@ -134,9 +135,13 @@ scope・検索語・詳細対象の変更時は、要求の世代番号と表示
 - 検索・詳細・scope 切替は C4 時点のアプリで隔離データを使って操作確認した。C5 以降の手入力・承認・設定・更新メニューの実画面確認は、Mac のロックにより未実施。UI の自動テストは IPC mock・状態管理・静的描画の検証であり、実 WebView の確認を代替しない
 - 実 Keychain の保存・再取得、CLI リンクの実配置、旧版→新版の実更新・再起動・HTTP 再開、Claude Code / Codex からの実接続は未実施。公開前にこれらの手動確認と署名鍵のバックアップ・Apple 資格情報の設定を完了する。配布サイトからの導入確認は公開後に実施する
 
+### 2026-08-29 時点の検証記録
+
+- main の core（`Config::update` / `Config::create_with`、token68 安全な接頭辞のキー発行）へ追従後、Apple Silicon macOS 上で root の Rust 196 件、desktop の Rust 82 件（全 feature、`--locked`）、UI の Bun 184 件、配布補助の Bun 78 件が成功。root / desktop の fmt・clippy・`--locked` build、ShellCheck、actionlint、`release-metadata.mjs verify` も通過した。GitHub Actions・Developer ID 署名・公証・実機更新は未実施
+
 ## 11. リスク・残論点
 
-- config の別プロセス間の更新は計画どおり last-write-wins。同時に CLI と設定画面で管理操作を行うと、追加・キー再発行が取り消され、旧キーが再び有効になる可能性がある。跨プロセスのロックは未実装で、管理操作は同時実行しない
+- config の別プロセス間の更新は、core の `Config::update` / `Config::create_with` が設定ファイルの隣に作る `.lock` ファイルのロックで read-modify-write 全体を直列化する（2026-08-29 に last-write-wins から変更）。CLI と設定画面で同時に管理操作を行っても、追加・キー再発行は失われない。対象外: ロックを通らない直接編集（エディタや旧版の `save` 直書き）は後勝ちのまま。ロックは同一ホストのファイルロックであり、ネットワークファイルシステム上の設定は保証しない
 - 実 Keychain の保存・再取得とプロンプト頻度は未検証。隔離した fake backend では保存失敗時の 0600 ファイルへのフォールバックと旧キーの除外を検証し、保管先を画面に表示する
 - アイコンはリポジトリ内の SVG から `cargo tauri icon` で生成する
 - Intel mac / Windows / Linux は対象外（latest.json の platforms は darwin-aarch64 のみ。将来追加可能）
