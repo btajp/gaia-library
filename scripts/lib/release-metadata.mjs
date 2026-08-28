@@ -87,10 +87,12 @@ try {
       },
     }, null, 2)}\n`);
   } else if (mode === "draft") {
+    // 対象 HEAD が無いと targetCommitish の比較が undefined 相手になるため、他モードと同様に先に止める。
+    const expectedHead = requireOutput("<head-sha>");
     const release = JSON.parse(await Bun.stdin.text());
     const names = release.assets?.map((asset) => asset.name).sort();
     const expected = [`gaia-library_${version}_aarch64.dmg`, "gaia-library.app.tar.gz", "gaia-library.app.tar.gz.sig", "latest.json", "checksums.txt"].sort();
-    ensure(release.isDraft === true && release.targetCommitish === output, "draft の対象コミットが一致しません");
+    ensure(release.isDraft === true && release.targetCommitish === expectedHead, "draft の対象コミットが一致しません");
     ensure(JSON.stringify(names) === JSON.stringify(expected), "draft の配布ファイルが揃っていません");
   } else if (mode === "notary") {
     const notaryResult = requireOutput("<notary-result.json>");

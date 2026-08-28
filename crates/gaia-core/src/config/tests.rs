@@ -337,3 +337,301 @@ fn keys_and_server_round_trip_and_default_empty() {
     assert!(old.keys.is_empty());
     assert_eq!(old.server.port, None);
 }
+
+fn entry_names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[cfg(unix)]
+#[test]
+fn save_through_symlink_chain_keeps_links_and_replaces_the_target() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    for target_exists in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        let aliases = dir.path().join("aliases");
+        fs::create_dir(&real).unwrap();
+        fs::create_dir(&aliases).unwrap();
+        let target = real.join("config.toml");
+        if target_exists {
+            let mut first = Config::default();
+            first.add_client(human("first")).unwrap();
+            first.save(&target).unwrap();
+        }
+        let link = aliases.join("config.toml");
+        let intermediate = aliases.join("second.toml");
+        symlink("second.toml", &link).unwrap();
+        symlink("../real/config.toml", &intermediate).unwrap();
+
+        let mut replacement = Config::default();
+        replacement.add_client(human("second")).unwrap();
+        replacement.save(&link).unwrap();
+
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(
+            fs::symlink_metadata(&intermediate)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read_link(&link).unwrap(), PathBuf::from("second.toml"));
+        assert_eq!(
+            fs::read_link(&intermediate).unwrap(),
+            PathBuf::from("../real/config.toml")
+        );
+        assert_eq!(Config::load(&target).unwrap(), replacement);
+        assert_eq!(Config::load(&link).unwrap(), replacement);
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "target_exists={target_exists}"
+        );
+        // 一時ファイルと lock は解決後のターゲットの兄弟に置き、別名側には何も作らない。
+        assert_eq!(entry_names(&real), ["config.toml", "config.toml.lock"]);
+        assert_eq!(entry_names(&aliases), ["config.toml", "second.toml"]);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn update_through_symlink_holds_the_lock_beside_the_target() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("real");
+    fs::create_dir(&real).unwrap();
+    let target = real.join("config.toml");
+    let mut config = Config::default();
+    config.add_client(human("me")).unwrap();
+    config.save(&target).unwrap();
+    let link = dir.path().join("config.toml");
+    symlink(&target, &link).unwrap();
+
+    Config::update(&link, |config| {
+        let competing = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(sibling_path(&target, ".lock"))
+            .unwrap();
+        assert!(matches!(
+            competing.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
+        assert!(!sibling_path(&link, ".lock").exists());
+        config.add_client(ClientIdentity {
+            name: "bot".into(),
+            role: Role::Agent,
+            default_scope: Some("cn".into()),
+        })
+    })
+    .unwrap();
+
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(Config::load(&target).unwrap().clients.len(), 2);
+    assert_eq!(entry_names(&real), ["config.toml", "config.toml.lock"]);
+    assert_eq!(entry_names(dir.path()), ["config.toml", "real"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_loops_are_reported_without_replacing_the_link() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let link = dir.path().join("config.toml");
+    symlink("config.toml", &link).unwrap();
+    let mut config = Config::default();
+    config.add_client(human("me")).unwrap();
+
+    assert!(matches!(
+        config.save(&link),
+        Err(ConfigError::Write { path, .. }) if path == link
+    ));
+    // update は lock を取る前の到達性確認（OS の symlink 追従）で読み取りエラーになる。
+    assert!(matches!(
+        Config::update(&link, |_| Ok(())),
+        Err(ConfigError::Read { path, .. }) if path == link
+    ));
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_link(&link).unwrap(), PathBuf::from("config.toml"));
+    assert_eq!(entry_names(dir.path()), ["config.toml"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn create_rejects_a_dangling_symlink_without_following_it() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let link = dir.path().join("config.toml");
+    let target = dir.path().join("real.toml");
+    symlink("real.toml", &link).unwrap();
+
+    let error = Config::default()
+        .create_with::<(), ConfigError>(&link, || panic!("must not initialize"))
+        .unwrap_err();
+    assert!(matches!(error, ConfigError::AlreadyExists(path) if path == link));
+    assert!(!target.exists());
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    // 拒否した操作はリンク先の兄弟に `.lock` を作らない。
+    assert_eq!(entry_names(dir.path()), ["config.toml"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn rejected_operations_leave_no_directories_or_lock_beside_a_dangling_target() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let link = dir.path().join("config.toml");
+    let missing = dir.path().join("nowhere");
+    symlink(missing.join("deep").join("config.toml"), &link).unwrap();
+
+    let error = Config::default()
+        .create_with::<(), ConfigError>(&link, || panic!("must not initialize"))
+        .unwrap_err();
+    assert!(matches!(error, ConfigError::AlreadyExists(path) if path == link));
+    assert!(matches!(
+        Config::update(&link, |_| Ok(())),
+        Err(ConfigError::Read { path, .. }) if path == link
+    ));
+    assert!(!missing.exists());
+    assert_eq!(entry_names(dir.path()), ["config.toml"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_to_a_directory_is_rejected_before_creating_a_lock() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let directory = dir.path().join("adir");
+    fs::create_dir(&directory).unwrap();
+    let link = dir.path().join("config.toml");
+    symlink("adir", &link).unwrap();
+    let mut config = Config::default();
+    config.add_client(human("me")).unwrap();
+
+    assert!(matches!(
+        config.save(&link),
+        Err(ConfigError::Write { path, .. }) if path == link
+    ));
+    assert!(matches!(
+        Config::update(&link, |_| Ok(())),
+        Err(ConfigError::Write { path, .. }) if path == link
+    ));
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(entry_names(dir.path()), ["adir", "config.toml"]);
+    assert!(entry_names(&directory).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_chains_up_to_the_limit_are_followed_and_longer_ones_are_rejected() {
+    use std::os::unix::fs::symlink;
+
+    for (depth, allowed) in [(MAX_SYMLINK_DEPTH, true), (MAX_SYMLINK_DEPTH + 1, false)] {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real.toml");
+        // link0 -> link1 -> ... -> link{depth-1} -> real.toml
+        for index in 0..depth {
+            let next = if index + 1 == depth {
+                "real.toml".to_string()
+            } else {
+                format!("link{}.toml", index + 1)
+            };
+            symlink(next, dir.path().join(format!("link{index}.toml"))).unwrap();
+        }
+        let head = dir.path().join("link0.toml");
+        let mut config = Config::default();
+        config.add_client(human("me")).unwrap();
+
+        let result = config.save(&head);
+        if allowed {
+            result.unwrap_or_else(|error| panic!("depth={depth}: {error}"));
+            assert_eq!(Config::load(&target).unwrap(), config);
+        } else {
+            assert!(
+                matches!(&result, Err(ConfigError::Write { path, .. }) if *path == head),
+                "depth={depth}: {result:?}"
+            );
+            assert!(!target.exists());
+        }
+        assert!(
+            fs::symlink_metadata(&head)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_lock_file_is_not_followed() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let mut config = Config::default();
+    config.add_client(human("me")).unwrap();
+    config.save(&path).unwrap();
+    let lock = sibling_path(&path, ".lock");
+    fs::remove_file(&lock).unwrap();
+    let other = dir.path().join("other.txt");
+    fs::write(&other, "hello").unwrap();
+    fs::set_permissions(&other, fs::Permissions::from_mode(0o644)).unwrap();
+    symlink("other.txt", &lock).unwrap();
+
+    assert!(matches!(
+        Config::update(&path, |_| Ok(())),
+        Err(ConfigError::Write { path, .. }) if path == lock
+    ));
+    assert!(matches!(
+        config.save(&path),
+        Err(ConfigError::Write { path, .. }) if path == lock
+    ));
+    assert_eq!(fs::read_to_string(&other).unwrap(), "hello");
+    assert_eq!(
+        fs::metadata(&other).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    assert!(
+        fs::symlink_metadata(&lock)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(Config::load(&path).unwrap(), config);
+}

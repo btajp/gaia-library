@@ -3,7 +3,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{self, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -14,6 +14,8 @@ use crate::identity::{ClientIdentity, Role};
 
 pub const APP_DIR: &str = "gaia-library";
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+/// 保存先の symlink 鎖を辿る上限。この段数までは辿り、超えたらループとみなして保存を拒否する。
+const MAX_SYMLINK_DEPTH: usize = 40;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -153,18 +155,11 @@ impl Config {
         path: &Path,
         initialize: impl FnOnce() -> Result<R, E>,
     ) -> Result<R, E> {
+        // lock 取得はリンク先の親ディレクトリと `.lock` を作るため、既存パス（dangling symlink を含む）は
+        // lock を取る前に拒否し、lock 下でも再検査する。
+        ensure_absent(path)?;
         let _lock = ConfigFileLock::acquire(path)?;
-        match fs::symlink_metadata(path) {
-            Ok(_) => return Err(ConfigError::AlreadyExists(path.to_path_buf()).into()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(source) => {
-                return Err(ConfigError::Read {
-                    path: path.to_path_buf(),
-                    source,
-                }
-                .into());
-            }
-        }
+        ensure_absent(path)?;
         self.validate()?;
         let output = initialize()?;
         self.save_atomic(path, false)?;
@@ -176,6 +171,12 @@ impl Config {
         path: &Path,
         update: impl FnOnce(&mut Self) -> Result<R, ConfigError>,
     ) -> Result<R, ConfigError> {
+        // 到達できない設定（dangling symlink など）は lock を取る前に読み取りエラーにし、
+        // リンク先の親ディレクトリや `.lock` を残さない。
+        fs::metadata(path).map_err(|source| ConfigError::Read {
+            path: path.to_path_buf(),
+            source,
+        })?;
         let _lock = ConfigFileLock::acquire(path)?;
         let mut config = Self::load(path)?;
         let output = update(&mut config)?;
@@ -187,13 +188,20 @@ impl Config {
         self.validate()?;
         let text =
             toml::to_string_pretty(self).map_err(|e| ConfigError::Serialize(e.to_string()))?;
-        let (mut temporary, temporary_path) = create_temporary_file(path)?;
+        // rename は symlink 自体を通常ファイルへ置き換えるため、鎖を辿った最終ターゲットを置換先にする。
+        // 一時ファイルも同じディレクトリに作り、rename が同一ファイルシステム内で完結するようにする。
+        let destination = if replace {
+            resolve_write_target(path)?
+        } else {
+            path.to_path_buf()
+        };
+        let (mut temporary, temporary_path) = create_temporary_file(&destination)?;
         let result = (|| {
             temporary.write_all(text.as_bytes())?;
             temporary.sync_all()?;
             drop(temporary);
             if replace {
-                fs::rename(&temporary_path, path)
+                fs::rename(&temporary_path, &destination)
             } else {
                 // hard link の公開は既存パス（dangling symlink を含む）を置き換えない。
                 fs::hard_link(&temporary_path, path)
@@ -292,15 +300,19 @@ struct ConfigFileLock {
 }
 
 impl ConfigFileLock {
+    /// lock file は symlink の別名ではなく解決後のターゲットの兄弟に置き、
+    /// 別名経由の並行更新も同じ lock で直列化する。
     fn acquire(config_path: &Path) -> Result<Self, ConfigError> {
-        ensure_parent(config_path)?;
-        let lock_path = sibling_path(config_path, ".lock");
+        let target = resolve_write_target(config_path)?;
+        ensure_parent(&target)?;
+        let lock_path = sibling_path(&target, ".lock");
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
+            // lock file が symlink に差し替えられていても、その先を開いて権限を変えない。
+            options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
         }
         let file = options
             .open(&lock_path)
@@ -318,6 +330,18 @@ impl ConfigFileLock {
     }
 }
 
+/// 既存パス（dangling symlink を含む）があれば `AlreadyExists` を返す。
+fn ensure_absent(path: &Path) -> Result<(), ConfigError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Err(ConfigError::AlreadyExists(path.to_path_buf())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(ConfigError::Read {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
 fn ensure_parent(path: &Path) -> Result<(), ConfigError> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -327,6 +351,70 @@ fn ensure_parent(path: &Path) -> Result<(), ConfigError> {
             source,
         })?;
     }
+    Ok(())
+}
+
+/// 保存先が symlink の場合はリンクを残し、鎖を辿った最終ターゲット（未作成でもよい）を返す。
+/// 上限を超える鎖（ループを含む）、読めないリンク、他ユーザー所有のリンク、
+/// 通常ファイル以外の既存ターゲットは `Write` エラーとして報告する。
+fn resolve_write_target(path: &Path) -> Result<PathBuf, ConfigError> {
+    let write_error = |source: io::Error| ConfigError::Write {
+        path: path.to_path_buf(),
+        source,
+    };
+    let mut target = path.to_path_buf();
+    // 1 段ごとに 1 反復、最終ターゲットの確認に 1 反復使うので、MAX_SYMLINK_DEPTH 段までは辿れる。
+    for _ in 0..=MAX_SYMLINK_DEPTH {
+        match fs::symlink_metadata(&target) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                ensure_owned_by_current_user(&target, &metadata).map_err(write_error)?;
+                let link = fs::read_link(&target).map_err(write_error)?;
+                target = if link.is_absolute() {
+                    link
+                } else {
+                    target.parent().unwrap_or_else(|| Path::new(".")).join(link)
+                };
+            }
+            Ok(metadata) if !metadata.is_file() => {
+                return Err(write_error(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{} is not a regular file", target.display()),
+                )));
+            }
+            Ok(_) => return Ok(target),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(target),
+            Err(error) => return Err(write_error(error)),
+        }
+    }
+    Err(write_error(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("too many levels of symbolic links (more than {MAX_SYMLINK_DEPTH})"),
+    )))
+}
+
+/// 手動で辿る symlink には OS の追従抑止（Linux の fs.protected_symlinks など）が効かないため、
+/// 実効ユーザー以外が所有するリンクは辿らない。
+#[cfg(unix)]
+fn ensure_owned_by_current_user(link: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    // SAFETY: geteuid は引数を取らず、常に成功する。
+    let current = unsafe { libc::geteuid() };
+    let owner = metadata.uid();
+    if owner == current {
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!(
+            "symlink {} is owned by uid {owner}, not the current user (uid {current}); refusing to follow it",
+            link.display()
+        ),
+    ))
+}
+
+#[cfg(not(unix))]
+fn ensure_owned_by_current_user(_link: &Path, _metadata: &fs::Metadata) -> io::Result<()> {
     Ok(())
 }
 

@@ -1430,9 +1430,10 @@ dependencies = [
 
 [[package]]
 name = "gaia-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "jsonschema",
+ "libc",
  "prettyplease",
  "rand 0.9.5",
  "rusqlite",
@@ -1452,7 +1453,7 @@ dependencies = [
 
 [[package]]
 name = "gaia-desktop"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64 0.22.1",
  "gaia-core",
@@ -1478,7 +1479,7 @@ dependencies = [
 
 [[package]]
 name = "gaia-mcp"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "axum",
  "futures-core",

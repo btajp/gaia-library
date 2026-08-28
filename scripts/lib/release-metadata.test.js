@@ -268,6 +268,14 @@ describe("draft publication gate", () => {
     expectSuccess(run("draft", { output: head, input: JSON.stringify(draft()) }));
   });
 
+  it("rejects a missing head argument with the usage before reading the draft", () => {
+    // 対象 HEAD が無いと targetCommitish の比較相手が undefined になる。正しい draft を渡しても止まること。
+    const result = run("draft", { input: JSON.stringify(draft()) });
+    expectRejected(result, "draft には <head-sha> が必要です");
+    expect(result.stderr).toContain("release-metadata.mjs draft <repo> <version> <head-sha>");
+    expect(result.stderr).not.toContain("undefined");
+  });
+
   it.each([
     ["missing asset", (value) => { value.assets.pop(); }],
     ["extra asset", (value) => { value.assets.push({ name: "unexpected.zip" }); }],

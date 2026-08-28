@@ -47,7 +47,7 @@ if lsof -nP -iTCP:8930 -iTCP:4119 -sTCP:LISTEN; then
 fi
 "$GAIA_REPO/desktop/build-app.sh"
 "$GAIA_REPO/desktop/src-tauri/binaries/gaia-aarch64-apple-darwin" init \
-  --affiliation updater-e2e --client-name updater-e2e --db "$GAIA_DB"
+  --affiliation updater-e2e --client updater-e2e --db "$GAIA_DB"
 "$GAIA_REPO/desktop/src-tauri/binaries/gaia-aarch64-apple-darwin" client keygen updater-e2e > /dev/null
 bun -e '
   const path = process.argv[1];

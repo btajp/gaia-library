@@ -2,11 +2,11 @@
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use crate::{
-    contracts::types::{RefPatch, RefTargetType, Reference},
+    contracts::types::{RefPatch, Reference},
     scope::ScopeSet,
 };
 
-use super::{StorageError, engagements, facts, interactions, parse_db_enum, required, targets};
+use super::{StorageError, parse_db_enum, required, targets};
 
 const COLS: &str = "id, target_type, target_id, system, uri, title, note, snapshot, scope, last_verified, created_at";
 
@@ -20,8 +20,13 @@ pub fn insert(conn: &Connection, patch: &RefPatch, scope: &str) -> Result<i64, S
     let system = required(patch.system.as_deref(), "ref.system")?;
     let uri = required(patch.uri.as_deref(), "ref.uri")?;
     let note = required(patch.note.as_deref(), "ref.note")?;
-    targets::ensure(conn, &target_type.to_string(), target_id)?;
-    ensure_content_target_in_scope(conn, target_type, target_id, scope)?;
+    // 内容層のターゲットは提案の scope 内に存在する行だけを「存在する」とみなす。
+    targets::ensure(
+        conn,
+        &target_type.to_string(),
+        target_id,
+        &ScopeSet::single(scope),
+    )?;
     conn.execute(
         "INSERT INTO refs(target_type, target_id, system, uri, title, note, snapshot, scope, last_verified) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -38,38 +43,6 @@ pub fn insert(conn: &Connection, patch: &RefPatch, scope: &str) -> Result<i64, S
         ],
     )?;
     Ok(conn.last_insert_rowid())
-}
-
-/// target_type が内容層（engagement / interaction / fact）のとき、ターゲット行が提案の scope 内に
-/// 存在することを検証する。person / organization / entity（名寄せ層）は共有のため未検査。
-fn ensure_content_target_in_scope(
-    conn: &Connection,
-    target_type: RefTargetType,
-    target_id: i64,
-    scope: &str,
-) -> Result<(), StorageError> {
-    if target_type == RefTargetType::Engagement
-        && engagements::get(conn, target_id, &ScopeSet::single(scope))?.is_none()
-    {
-        return Err(StorageError::NotFound(format!(
-            "{target_type} {target_id} (in scope `{scope}`)"
-        )));
-    }
-    if target_type == RefTargetType::Interaction
-        && interactions::get(conn, target_id, &ScopeSet::single(scope))?.is_none()
-    {
-        return Err(StorageError::NotFound(format!(
-            "{target_type} {target_id} (in scope `{scope}`)"
-        )));
-    }
-    if target_type == RefTargetType::Fact
-        && facts::get(conn, target_id, &ScopeSet::single(scope))?.is_none()
-    {
-        return Err(StorageError::NotFound(format!(
-            "{target_type} {target_id} (in scope `{scope}`)"
-        )));
-    }
-    Ok(())
 }
 
 /// 紐付け先（target_type / target_id）は変更不可。内容だけ更新する。
