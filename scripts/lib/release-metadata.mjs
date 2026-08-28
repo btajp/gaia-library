@@ -30,6 +30,12 @@ function writeNew(path, value) {
   writeFileSync(path, value, { flag: "wx", mode: 0o600 });
 }
 
+// 出力先引数が無いまま fs に渡すと Node の型エラーになるため、使い方を示して止める。
+function requireOutput(placeholder) {
+  ensure(output, `${mode} には ${placeholder} が必要です。使い方: release-metadata.mjs ${mode} <repo> <version> ${placeholder}`);
+  return output;
+}
+
 try {
   ensure(repo, "リポジトリのパスが必要です");
   if (mode === "pins") {
@@ -52,6 +58,7 @@ try {
     ensure(!updater.dangerousInsecureTransportProtocol, "本番で insecure updater transport は使用できません");
     notes();
   } else if (mode === "overlay") {
+    const overlayOutput = requireOutput("<overlay-output.json>");
     const overlay = json("desktop/src-tauri/tauri.updater-artifacts.conf.json");
     ensure(Object.keys(overlay).length === 1 && overlay.bundle?.createUpdaterArtifacts === true
       && Object.keys(overlay.bundle).length === 1,
@@ -63,12 +70,13 @@ try {
       signingIdentity: identity,
       hardenedRuntime: true,
     };
-    writeNew(output, `${JSON.stringify(overlay, null, 2)}\n`);
+    writeNew(overlayOutput, `${JSON.stringify(overlay, null, 2)}\n`);
   } else if (mode === "assets") {
-    const signature = readFileSync(join(output, "gaia-library.app.tar.gz.sig"), "utf8").trim();
+    const staging = requireOutput("<staging-dir>");
+    const signature = readFileSync(join(staging, "gaia-library.app.tar.gz.sig"), "utf8").trim();
     ensure(signature, "updater 署名が空です");
-    writeNew(join(output, "release-notes.md"), `${notes()}\n`);
-    writeNew(join(output, "latest.json"), `${JSON.stringify({
+    writeNew(join(staging, "release-notes.md"), `${notes()}\n`);
+    writeNew(join(staging, "latest.json"), `${JSON.stringify({
       version,
       pub_date: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
       platforms: {
@@ -85,7 +93,8 @@ try {
     ensure(release.isDraft === true && release.targetCommitish === output, "draft の対象コミットが一致しません");
     ensure(JSON.stringify(names) === JSON.stringify(expected), "draft の配布ファイルが揃っていません");
   } else if (mode === "notary") {
-    ensure(JSON.parse(readFileSync(output, "utf8")).status === "Accepted", "DMG の公証が Accepted ではありません");
+    const notaryResult = requireOutput("<notary-result.json>");
+    ensure(JSON.parse(readFileSync(notaryResult, "utf8")).status === "Accepted", "DMG の公証が Accepted ではありません");
   } else {
     throw new Error("未知の release metadata 操作です");
   }

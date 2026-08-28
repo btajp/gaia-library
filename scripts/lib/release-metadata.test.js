@@ -153,6 +153,26 @@ describe("CHANGELOG sections", () => {
   });
 });
 
+describe("missing output argument", () => {
+  it.each([
+    ["overlay", "<overlay-output.json>"],
+    ["assets", "<staging-dir>"],
+    ["notary", "<notary-result.json>"],
+  ])("rejects %s without an output argument and prints the usage", (mode, placeholder) => {
+    // 出力先以外は正常系と同じ入力にし、失敗理由が出力先の欠落だけになるようにする。
+    if (mode === "assets") write("assets/gaia-library.app.tar.gz.sig", "fixture-signature");
+    if (mode === "notary") writeJson("notary.json", { status: "Accepted" });
+    const result = run(mode);
+    expectRejected(result, `${mode} には ${placeholder} が必要です`);
+    expect(result.stderr).toContain(`release-metadata.mjs ${mode} <repo> <version> ${placeholder}`);
+    expect(result.stderr).not.toContain("undefined");
+    expect(result.stderr).not.toContain("must be");
+    expect(existsSync(join(fixture, "release.conf.json"))).toBe(false);
+    expect(existsSync(join(fixture, "assets/latest.json"))).toBe(false);
+    expect(existsSync(join(fixture, "assets/release-notes.md"))).toBe(false);
+  });
+});
+
 describe("release signing overlay", () => {
   it("forces Developer ID and hardened runtime without changing source configs", () => {
     const base = read(confPath);
