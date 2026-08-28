@@ -141,3 +141,143 @@ async fn shutdown_terminates_an_active_sse_session() {
         .expect("shutdown timed out with an active SSE session")
         .unwrap();
 }
+
+/// 300 ms 待つ解決器。ToolService::call が spawn_blocking で呼ばれ、他の要求を止めないことを観測する。
+struct SlowResolver;
+
+impl gaia_core::sources::SourceResolver for SlowResolver {
+    fn system(&self) -> &'static str {
+        "slow"
+    }
+
+    fn availability(
+        &self,
+        _settings: &gaia_core::config::SourcesConfig,
+    ) -> gaia_core::sources::Availability {
+        gaia_core::sources::Availability::Ready
+    }
+
+    fn max_concurrency(&self) -> usize {
+        1
+    }
+
+    fn resolve(
+        &self,
+        _request: gaia_core::sources::ResolveRequest<'_>,
+    ) -> Result<gaia_core::sources::Resolved, gaia_core::sources::Unresolved> {
+        std::thread::sleep(Duration::from_millis(300));
+        Ok(gaia_core::sources::Resolved {
+            content: "slow body".into(),
+            notes: vec![],
+        })
+    }
+}
+
+#[tokio::test]
+async fn blocking_tool_calls_do_not_stall_other_requests() {
+    let (auth, human, agent) = auth();
+    let mut registry = gaia_core::sources::SourceRegistry::empty();
+    registry.register(Arc::new(SlowResolver)).unwrap();
+    let service = {
+        let db = gaia_core::storage::Db::open_in_memory().unwrap();
+        gaia_core::admin::add_affiliation(&db, "fixture", "cn", None).unwrap();
+        Arc::new(
+            gaia_core::tools::ToolService::new(
+                db,
+                gaia_core::contracts::Catalog::embedded().unwrap(),
+            )
+            .with_sources(registry),
+        )
+    };
+    let server = serve_http(service, auth, Some(0)).await.unwrap();
+    let addr = server.local_addr();
+    let human_session = initialize(addr, &human).await;
+    let person = call(
+        addr,
+        &human,
+        &human_session,
+        2,
+        "propose_update",
+        json!({"target_type":"person","action":"insert","patch":{"name":"対象"},"kind":"fact","request_id":"slow-person-1"}),
+    )
+    .await;
+    let proposal_id = person["result"]["structuredContent"]["proposal_id"]
+        .as_i64()
+        .unwrap();
+    let approved = call(
+        addr,
+        &human,
+        &human_session,
+        3,
+        "approve_proposal",
+        json!({"proposal_id": proposal_id}),
+    )
+    .await;
+    let person_id = approved["result"]["structuredContent"]["result"]["id"]
+        .as_i64()
+        .unwrap();
+    let reference = call(
+        addr,
+        &human,
+        &human_session,
+        4,
+        "propose_update",
+        json!({"target_type":"ref","action":"insert","kind":"fact","request_id":"slow-ref-1",
+               "patch":{"target_type":"person","target_id":person_id,"system":"slow","uri":"slow://1","note":"n"}}),
+    )
+    .await;
+    let proposal_id = reference["result"]["structuredContent"]["proposal_id"]
+        .as_i64()
+        .unwrap();
+    let approved = call(
+        addr,
+        &human,
+        &human_session,
+        5,
+        "approve_proposal",
+        json!({"proposal_id": proposal_id}),
+    )
+    .await;
+    let ref_id = approved["result"]["structuredContent"]["result"]["id"]
+        .as_i64()
+        .unwrap();
+
+    let agent_session = initialize(addr, &agent).await;
+    let started = std::time::Instant::now();
+    let slow = tokio::spawn({
+        let agent = agent.clone();
+        let agent_session = agent_session.clone();
+        async move {
+            call(
+                addr,
+                &agent,
+                &agent_session,
+                6,
+                "resolve_source",
+                json!({"ref_id": ref_id}),
+            )
+            .await
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let info = call(
+        addr,
+        &agent,
+        &agent_session,
+        7,
+        "get_server_info",
+        json!({}),
+    )
+    .await;
+    let info_elapsed = started.elapsed();
+    assert_eq!(info["result"]["structuredContent"]["name"], "gaia_library");
+    assert!(
+        info_elapsed < Duration::from_millis(280),
+        "get_server_info waited for the blocking resolve: {info_elapsed:?}"
+    );
+    let slow = slow.await.unwrap();
+    assert_eq!(slow["result"]["structuredContent"]["resolved"], true);
+    assert_eq!(slow["result"]["structuredContent"]["content"], "slow body");
+    assert!(started.elapsed() >= Duration::from_millis(300));
+    server.shutdown().await.unwrap();
+}

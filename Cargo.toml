@@ -22,7 +22,8 @@ http = "1"
 jsonschema = { version = "0.51", default-features = false }
 libc = "0.2"
 rand = "0.9"
-rmcp = { version = "3.1", features = ["server", "transport-io", "transport-streamable-http-server"] }
+rmcp = { version = "3.1", features = ["server", "client", "transport-io", "transport-child-process", "transport-streamable-http-server"] }
+process-wrap = { version = "9.0", features = ["tokio1"] }
 rusqlite = { version = "0.40", features = ["bundled", "serde_json"] }
 rusqlite_migration = "2.6"
 serde = { version = "1", features = ["derive"] }

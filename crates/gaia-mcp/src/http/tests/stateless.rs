@@ -43,9 +43,7 @@ async fn request_local_schema_lookup_preserves_stateless_tool_errors_and_authori
         .unwrap();
     let addr = server.local_addr();
     // 各要求は別々の SDK schema cache を持ち、未知名を後続要求へ蓄積しない。
-    let names = (0..64)
-        .map(|id| format!("missing-tool-{id}"))
-        .chain(["resolve_source".into()]);
+    let names = (0..64).map(|id| format!("missing-tool-{id}"));
     for (id, name) in names.enumerate() {
         let response = response(
             addr,
@@ -61,6 +59,18 @@ async fn request_local_schema_lookup_preserves_stateless_tool_errors_and_authori
         assert_eq!(sessions.available_slots(), 1);
         assert!(header(&response, "mcp-session-id").is_none());
     }
+    // 登録済みの resolve_source に空引数を投げると invalid_params（セッションは作らない）
+    let invalid = response(
+        addr,
+        stateless_call(addr, &agent, 99, "resolve_source", json!({})),
+    )
+    .await;
+    assert_eq!(status(&invalid), 400, "{invalid}");
+    let error = rpc(&invalid);
+    assert_eq!(error["error"]["code"], -32602);
+    assert_eq!(error["error"]["data"]["code"], "invalid_params");
+    assert_eq!(sessions.available_slots(), 1);
+    assert!(header(&invalid, "mcp-session-id").is_none());
     let denied = response(
         addr,
         stateless_call(

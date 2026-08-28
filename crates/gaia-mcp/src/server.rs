@@ -112,8 +112,9 @@ impl ServerHandler for GaiaServer {
         InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("gaia_library", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "仕事の記憶の索引。search_context が要点と注記付き参照（回答の設計図）を返すので、返った refs は \
-                 クライアント側のコネクタ（Notion / Box / ファイル等）で辿ること。書き込みは propose_update で提案し、\
+                "仕事の記憶の索引。search_context が要点と注記付き参照（回答の設計図）を返す。返った refs は \
+                 resolve_source（file / url / narumi の解決器。設定済みのものだけ）でサーバー側に取得させるか、\
+                 クライアント側のコネクタ（Notion / Box 等）で辿ること。書き込みは propose_update で提案し、\
                  人間の承認（approve_proposal）を待つ。",
             )
     }
@@ -148,7 +149,18 @@ impl ServerHandler for GaiaServer {
             .clone()
             .map(Value::Object)
             .unwrap_or(json!({}));
-        match self.service.call(&identity, request.name.as_ref(), args) {
+        // ToolService::call は同期。resolve_source のように最長数十秒ブロックするツールがあるため、
+        // 全ツール一律でブロッキング用スレッドへ逃がし、JSON-RPC の受信ループや他セッションを止めない。
+        let service = self.service.clone();
+        let name = request.name.to_string();
+        let result = tokio::task::spawn_blocking(move || service.call(&identity, &name, args))
+            .await
+            .unwrap_or_else(|error| {
+                Err(ToolError::internal(format!(
+                    "tool task did not complete: {error}"
+                )))
+            });
+        match result {
             Ok(v) => Ok(CallToolResult::structured(v).into()),
             Err(e) if e.code.is_protocol_error() => Err(to_rpc_error(&e)),
             Err(e) => Ok(CallToolResult::structured_error(json!({"error": e.to_json()})).into()),
@@ -259,8 +271,12 @@ mod tests {
             agent()
         );
         assert!(server.get_tool("approve_proposal").is_none());
+        assert!(
+            server.get_tool("resolve_source").is_some(),
+            "v0.2.0 で登録済み"
+        );
         let http = GaiaServer::new_http(service());
         assert!(http.get_tool("approve_proposal").is_some());
-        assert!(http.get_tool("resolve_source").is_none());
+        assert!(http.get_tool("resolve_source").is_some());
     }
 }
