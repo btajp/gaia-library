@@ -45,6 +45,10 @@ jobs:
           fi
       - if: steps.changes.outputs.required == 'true'
         uses: dtolnay/rust-toolchain@stable
+        with:
+          # rust-toolchain.toml と同じ版・components に固定する
+          toolchain: "1.95.0"
+          components: rustfmt, clippy
       - if: steps.changes.outputs.required == 'true'
         uses: Swatinem/rust-cache@v2
         with:
