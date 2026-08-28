@@ -1,4 +1,9 @@
-use std::cell::Cell;
+use std::{
+    cell::Cell,
+    sync::{Arc, Barrier},
+    thread,
+    time::Duration,
+};
 
 use gaia_core::auth::hash_key;
 use serde_json::Value;
@@ -88,6 +93,78 @@ fn unknown_client_does_not_issue_or_store_a_key() {
     config_at(&path);
     assert!(keygen_with(&path, "missing", |_, _| panic!("unknown client")).is_err());
     assert!(Config::load(&path).unwrap().keys.is_empty());
+}
+
+#[test]
+fn concurrent_app_and_cli_updates_keep_every_client_and_key() {
+    const ROUNDS: usize = 6;
+    let dir = tempfile::tempdir().unwrap();
+    let path = Arc::new(dir.path().join("config.toml"));
+    config_at(&path);
+    let barrier = Arc::new(Barrier::new(ROUNDS * 2 + 1));
+    let mut issuers = Vec::new();
+    for index in 0..ROUNDS {
+        // 設定画面からの追加とキー発行。
+        let (app_path, app_barrier) = (Arc::clone(&path), Arc::clone(&barrier));
+        issuers.push(thread::spawn(move || {
+            app_barrier.wait();
+            let name = format!("app-{index}");
+            let issued = add_with(
+                &app_path,
+                &name,
+                Role::Agent,
+                Some("scope"),
+                true,
+                |_, _| Ok(StoreLocation::Keychain),
+            )
+            .unwrap()
+            .unwrap();
+            (name, issued.key)
+        }));
+        // CLI の `gaia client add --generate-key` と同じ経路（Config::update）。
+        let (cli_path, cli_barrier) = (Arc::clone(&path), Arc::clone(&barrier));
+        issuers.push(thread::spawn(move || {
+            cli_barrier.wait();
+            let name = format!("cli-{index}");
+            let key = Config::update(&cli_path, |config| {
+                thread::sleep(Duration::from_millis(2));
+                config.add_client(ClientIdentity {
+                    name: name.clone(),
+                    role: Role::Agent,
+                    default_scope: Some("scope".into()),
+                })?;
+                let (key, hash) = auth::generate_key(&name);
+                config.keys.insert(name.clone(), hash);
+                Ok(key)
+            })
+            .unwrap();
+            (name, key)
+        }));
+    }
+    // 既存クライアントの再発行も同時に行い、結果のキーだけが有効になる。
+    let reissued = {
+        let (path, barrier) = (Arc::clone(&path), Arc::clone(&barrier));
+        thread::spawn(move || {
+            barrier.wait();
+            keygen_with(&path, "bot", |_, _| Ok(StoreLocation::File))
+                .unwrap()
+                .key
+        })
+    };
+    let mut issued: Vec<_> = issuers
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect();
+    issued.push(("bot".into(), reissued.join().unwrap()));
+
+    let config = Config::load(&path).unwrap();
+    assert_eq!(config.clients.len(), ROUNDS * 2 + 1);
+    assert_eq!(config.keys.len(), ROUNDS * 2 + 1);
+    let table = AuthTable::from_config(&config);
+    for (name, key) in &issued {
+        assert_eq!(config.keys[name], hash_key(key));
+        assert_eq!(table.verify(key).unwrap().name, *name);
+    }
 }
 
 #[test]

@@ -3,7 +3,7 @@ use std::path::Path;
 
 use gaia_core::{
     auth::{self, AuthTable},
-    config::Config,
+    config::{Config, ConfigError},
     identity::{ClientIdentity, Role},
 };
 use serde::Serialize;
@@ -81,20 +81,20 @@ fn add_with(
     let default_scope = default_scope
         .map(str::trim)
         .filter(|scope| !scope.is_empty());
-    let mut config = Config::load(path).map_err(|e| e.to_string())?;
-    config
-        .add_client(ClientIdentity {
+    // CLI の `gaia client add` と同じ lock で read-modify-write を直列化し、並行更新を失わない。
+    let key = Config::update(path, |config| {
+        config.add_client(ClientIdentity {
             name: name.into(),
             role,
             default_scope: default_scope.map(str::to_owned),
-        })
-        .map_err(|e| e.to_string())?;
-    let key = generate_key.then(|| {
-        let (key, hash) = auth::generate_key(name);
-        config.keys.insert(name.into(), hash);
-        key
-    });
-    config.save(path).map_err(|e| e.to_string())?;
+        })?;
+        Ok(generate_key.then(|| {
+            let (key, hash) = auth::generate_key(name);
+            config.keys.insert(name.into(), hash);
+            key
+        }))
+    })
+    .map_err(|error| update_error(name, error))?;
     Ok(key.map(|key| IssuedKey {
         storage: store_with(name, &key, store),
         key,
@@ -110,17 +110,30 @@ fn keygen_with(
     name: &str,
     store: impl FnOnce(&str, &str) -> Result<StoreLocation, String>,
 ) -> Result<IssuedKey, String> {
-    let mut config = Config::load(path).map_err(|e| e.to_string())?;
-    if config.client(name).is_none() {
-        return Err("指定されたクライアントがありません".into());
-    }
-    let (key, hash) = auth::generate_key(name);
-    config.keys.insert(name.into(), hash);
-    config.save(path).map_err(|e| e.to_string())?;
+    // CLI の `gaia client keygen` と同じ lock で直列化する。旧キーは保存成功時に失効する。
+    let key = Config::update(path, |config| {
+        if config.client(name).is_none() {
+            return Err(ConfigError::UnknownClient(name.into()));
+        }
+        let (key, hash) = auth::generate_key(name);
+        config.keys.insert(name.into(), hash);
+        Ok(key)
+    })
+    .map_err(|error| update_error(name, error))?;
     Ok(IssuedKey {
         storage: store_with(name, &key, store),
         key,
     })
+}
+
+/// 操作対象のクライアントが無い場合だけ UI 向けの文言にし、設定ファイル自体の異常はそのまま伝える。
+fn update_error(name: &str, error: ConfigError) -> String {
+    match error {
+        ConfigError::UnknownClient(unknown) if unknown == name => {
+            "指定されたクライアントがありません".into()
+        }
+        error => error.to_string(),
+    }
 }
 
 pub(crate) fn store_key(client: &str, key: &str) -> KeyStorage {

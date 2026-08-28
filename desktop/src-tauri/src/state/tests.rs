@@ -294,12 +294,10 @@ async fn settings_mutations_reload_and_serialize_config_writes() {
         tasks.push(tokio::spawn(async move {
             state
                 .run_settings(move |runtime| {
-                    let mut config =
-                        Config::load(&runtime.config_path).map_err(|e| e.to_string())?;
-                    config
-                        .add_client(client(&format!("bot-{index}"), Role::Agent))
-                        .map_err(|e| e.to_string())?;
-                    config.save(&runtime.config_path).map_err(|e| e.to_string())
+                    Config::update(&runtime.config_path, |config| {
+                        config.add_client(client(&format!("bot-{index}"), Role::Agent))
+                    })
+                    .map_err(|e| e.to_string())
                 })
                 .await
         }));
@@ -332,10 +330,11 @@ async fn cancelled_settings_waiter_does_not_release_the_write_before_shutdown() 
                 .run_settings(move |runtime| {
                     entered.send(()).unwrap();
                     resumed.recv().unwrap();
-                    let mut config =
-                        Config::load(&runtime.config_path).map_err(|e| e.to_string())?;
-                    config.server.port = Some(4321);
-                    config.save(&runtime.config_path).map_err(|e| e.to_string())
+                    Config::update(&runtime.config_path, |config| {
+                        config.server.port = Some(4321);
+                        Ok(())
+                    })
+                    .map_err(|e| e.to_string())
                 })
                 .await
         })
