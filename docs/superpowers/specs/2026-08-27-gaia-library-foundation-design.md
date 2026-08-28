@@ -26,7 +26,7 @@ gaia-library（ガイアライブラリー）は、仕事の記憶の「思い�
 
 - サブプロジェクト B: Streamable HTTP トランスポート、API キー（bearer）認証、human キーの OS キーチェーン保持、エージェント向け接続設定の生成
 - サブプロジェクト C: デスクトップアプリ（Tauri）。サーバー・DB の起動、検索／人物・案件閲覧／手入力／提案承認の画面、updater、署名・公証・リリーススクリプト、E2E
-- `resolve_source`（narumi など外部 MCP の参照解決）。契約ファイルは置くが登録しない
+- `resolve_source`（narumi など外部 MCP の参照解決）。契約ファイルは置くが登録しない → v0.2.0 で登録した（別紙 `2026-08-29-gaia-library-resolve-source-design.md`）
 - 形態素解析（lindera-sqlite）、ベクトル検索（sqlite-vec）
 - narumi 連携の実機確認（narumi が未実装のため）
 
@@ -321,7 +321,7 @@ END;
     { "name": "get_engagement",   "file": "tools/get_engagement.json",   "roles": ["human", "agent"], "enabled": true },
     { "name": "get_glossary",     "file": "tools/get_glossary.json",     "roles": ["human", "agent"], "enabled": true },
     { "name": "resolve_speakers", "file": "tools/resolve_speakers.json", "roles": ["human", "agent"], "enabled": true },
-    { "name": "resolve_source",   "file": "tools/resolve_source.json",   "roles": ["human", "agent"], "enabled": false },
+    { "name": "resolve_source",   "file": "tools/resolve_source.json",   "roles": ["human", "agent"], "enabled": true },
     { "name": "propose_update",   "file": "tools/propose_update.json",   "roles": ["human", "agent"], "enabled": true },
     { "name": "list_proposals",   "file": "tools/list_proposals.json",   "roles": ["human", "agent"], "enabled": true },
     { "name": "approve_proposal", "file": "tools/approve_proposal.json", "roles": ["human"],          "enabled": true },
@@ -461,7 +461,7 @@ MCP への写像:
 突合: 正規化した名前で `person_aliases.alias` を完全一致（`kind='normalized'` 行）。1 件なら `matched`（confidence 1.0）、複数なら `ambiguous`（候補列挙）、0 件なら前方一致・部分一致で候補を探し `unmatched`（候補があれば confidence 0.6 以下で列挙）。`engagement_id` があれば `engagement_people` に含まれる人物を優先する。
 出力 `{ results: [{ input, normalized, status, person?, confidence, candidates: [{ person_id, name, confidence, reason }] }] }`。
 
-**resolve_source** — 契約のみ。`enabled: false` のため登録しない。
+**resolve_source** — v0.2.0 で登録（契約 1.1.0）。設計は別紙 `2026-08-29-gaia-library-resolve-source-design.md`。
 
 ### 8.4 提案系ツール
 
@@ -574,7 +574,6 @@ Notion ドラフトを基に、本セッションの決定（workspace 構成、
 ## 13. リスクと未検証事項
 
 - typify の制約により契約の表現力が draft-07 相当に限定される。narumi 側の datamodel-code-generator とも整合する見込みだが、narumi 実装時に再確認が必要
-- `resolve_source` が未登録のため、v1 契約 13 ツールのうち 1 つは今回動かない
 - stdio の識別固定の限界（§7.1）
 - FTS trigram は日本語の同義・活用に弱い。検索が実際に失敗し始めたら lindera-sqlite への格上げを検討する
 - `Mutex<Connection>` の単一接続は、HTTP で同時接続が増えた場合に見直す可能性がある

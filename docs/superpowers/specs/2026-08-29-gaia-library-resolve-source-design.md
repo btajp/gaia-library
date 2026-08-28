@@ -168,6 +168,7 @@ impl SourceRegistry {
     pub fn get(&self, system: &str) -> Option<&Arc<dyn SourceResolver>>; // trim + ASCII 小文字化 + 完全一致
     pub fn acquire(&self, system: &str) -> Option<Permit<'_>>;   // None = 上限到達（busy）
     pub fn settings(&self) -> Result<SourcesConfig, String>;
+    pub fn systems(&self) -> Vec<String>;                        // 登録済み system 名（NoResolver の available に使う）
     pub fn ready_systems(&self, settings: &SourcesConfig) -> Vec<String>;  // Availability::Ready のみ
 }
 
@@ -378,7 +379,7 @@ pub fn handle(ctx: &CallContext<'_>, input: ResolveSourceInput) -> Result<Resolv
 
 ## 7. url 解決器（`sources/url.rs` ＋ `sources/net.rs`）
 
-`UrlResolver { policy: AddressPolicy }`。`AddressPolicy::PublicOnly` が本番。`#[cfg(test)]` 限定で `AddressPolicy::AllowLoopback`（`UrlResolver::for_tests()`）を持ち、本番コードから到達できない。`availability`: `allow_hosts` が非空なら `Ready`、空なら `Unconfigured { setting: "[sources.url].allow_hosts" }`。`max_concurrency = 2`。
+`UrlResolver { policy: AddressPolicy }`。`AddressPolicy::PublicOnly` が本番。`#[cfg(test)]` 限定で `AddressPolicy::AllowLoopback` を持ち、本番コードから到達できない（テストは `fetch(uri, settings, AddressPolicy::AllowLoopback)` を直接呼ぶ。`UrlResolver::for_tests()` は置かない）。`availability`: `allow_hosts` が非空なら `Ready`、空なら `Unconfigured { setting: "[sources.url].allow_hosts" }`。`max_concurrency = 2`。
 
 ### 7.1 URL 検査 `check_url(&Url, &UrlSourceConfig) -> Result<(), Reason>`（各ホップで同じ関数）
 
@@ -456,8 +457,8 @@ pub struct NarumiTarget { pub meeting_id: String, pub version: Option<u32> }
 ```
 
 - `Url::parse` で scheme `narumi`、host `meeting`（小文字固定）、path `/<meeting_id>` の 1 要素（末尾スラッシュ不可）を要求
-- `meeting_id` は narumi 契約の形式（8 桁数字 `T` 6 桁数字 `Z-` 16 進小文字 8 桁、計 24 文字）を長さと文字種で手書き検査する（regex 依存なし）。合わなければ `InvalidUri { system: "narumi", rule: "meeting_id" }` を返し、**子プロセスを起動しない**
-- query は `version=<1 以上の整数>` のみ許可。未知のキー・userinfo・ポートは `InvalidUri { rule: "query" / "host" }`
+- `meeting_id` は narumi 契約の形式（8 桁数字 `T` 6 桁数字 `Z-` 16 進小文字 8 桁、計 25 文字）を長さと文字種で手書き検査する（regex 依存なし）。合わなければ `InvalidUri { system: "narumi", rule: "meeting_id" }` を返し、**子プロセスを起動しない**
+- query は `version=<1 以上の整数>` のみ許可。未知のキー・userinfo・ポートは `InvalidUri { rule: "query" / "userinfo" / "host" }`。`url` crate は `..` / `.` のドットセグメントを正規化するため、`narumi://meeting/../<id>` は `<id>` として解釈される（実装で確認済み。meeting_id 検査が最終防衛線）
 - fragment は許可して無視する（`#t=1200` などクライアント向けヒントを URI に残せる。既存シード `minutes://meeting/42#t=1200` と同じ流儀）
 
 ### 9.2 同期境界
@@ -488,7 +489,7 @@ fn resolve(&self, req: ResolveRequest<'_>) -> Result<Resolved, Unresolved> {
 5. `timeout_at(deadline, running.peer().call_tool(CallToolRequestParams { name: "get_minutes", arguments: { meeting_id, version?, scope } }))`
 6. 成功・失敗・タイムアウトのすべてで `let _ = running.cancel().await`（stdin close → 3 秒待ち → kill）。その後 transport が drop される
 7. `map_get_minutes(result)` で `Resolved` に写す
-8. プロセスグループが残っていれば（`grandchild` テストで観測）unix の `libc::killpg(pgid, SIGKILL)` を cancel 後に送る補助を gaia-mcp に足す
+8. cancel 後（および initialize 失敗・タイムアウト時）に unix の `libc::killpg(pgid, SIGKILL)` を無条件に送る（`grandchild` テストで `uv run` 相当の孫が残ることを観測したため。pgid = 子の pid で、グループが空なら ESRCH を無視する。子の終了直後に同じ pid が別のプロセスグループ leader として再利用される窓は数ミリ秒で、同一 OS ユーザーの脅威モデルでは許容する）
 
 ### 9.4 応答の解釈 `map_get_minutes(CallToolResult) -> Result<Resolved, Unresolved>`（純関数。JSON フィクスチャでテスト）
 
@@ -572,7 +573,7 @@ roots = ["/Users/<me>/Library/Application Support/narumi/meetings"]   # NARUMI_H
 `sources/url.rs`
 - `check_url` 表テスト: `https://example.com/a.md` 許可、`ftp://` / `file://` / `javascript:` 拒否、`http://user:pw@example.com/` 拒否、`http://localhost/` / `http://foo.localhost/` / `http://intranet/` / `http://example.com./` 拒否、`http://127.0.0.1/` / `http://127.1/` / `http://2130706433/` / `http://0x7f.1/` / `http://0177.0.0.1/` / `http://[::1]/` / `http://[::ffff:127.0.0.1]/` / `http://169.254.169.254/latest/meta-data` 拒否（`url` の正規化後に IP として判定される）、`allow_hosts` 不一致で拒否
 - `GuardedResolver` に偽の内側 Resolver を注入: 全件公開なら通る、1 件でも非公開なら `rejected` が立って失敗
-- 実 HTTP 経路（`std::net::TcpListener` の固定応答サーバーを 127.0.0.1 で立て、`UrlResolver::for_tests()` の loopback 許可ポリシーで疎通）: 200 `text/plain`、404 → `UpstreamStatus { 404 }`、`Content-Type: image/png` → `UnsupportedContentType`、`charset=shift_jis` → `UnsupportedContentType`、`Content-Length` 超過 → 読まずに `TooLarge`、長さ不明の超過 → 切り詰めと `BodyTruncated`、`text/html` → verbatim ＋ `HtmlAsIs`、`302 Location: http://169.254.169.254/` → `UrlNotAllowed { Address }`（本番ポリシーで別テスト）、リダイレクト 4 回 → `UrlNotAllowed { Redirects }`、応答遅延（`timeout_secs = 1`）→ `TimedOut`、`Set-Cookie` を次ホップに送らない、リクエストに `Accept-Encoding` が無い
+- 実 HTTP 経路（`std::net::TcpListener` の固定応答サーバーを 127.0.0.1 で立て、`AddressPolicy::AllowLoopback` で疎通）: 200 `text/plain`、404 → `UpstreamStatus { 404 }`、`Content-Type: image/png` → `UnsupportedContentType`、`charset=shift_jis` → `UnsupportedContentType`、`Content-Length` 超過 → 読まずに `TooLarge`、長さ不明の超過 → 切り詰めと `BodyTruncated`、`text/html` → verbatim ＋ `HtmlAsIs`、`302 Location: http://169.254.169.254/` → `UrlNotAllowed { Address }`（本番ポリシーで別テスト）、リダイレクト 4 回 → `UrlNotAllowed { Redirects }`、応答遅延（`timeout_secs = 1`）→ `TimedOut`、`Set-Cookie` を次ホップに送らない、リクエストに `Accept-Encoding` が無い
 - 本番ポリシーで `http://127.0.0.1:<port>/` が接続前に拒否される（サーバー側の accept が呼ばれない）
 
 `sources/file.rs`（tempdir を root に）
@@ -613,13 +614,13 @@ roots = ["/Users/<me>/Library/Application Support/narumi/meetings"]   # NARUMI_H
 - `hang`（`timeout_secs = 2`）→ `TimedOut`、呼び出しが 8 秒以内に返り、子の pid が消えている
 - `exit` → `NarumiHandshakeFailed`。存在しないコマンド → `NarumiStartFailed`
 - `wrong_name` → `NarumiNotNarumi`
-- `junk_stdout` → `NarumiHandshakeFailed` か `NarumiInvalidResponse`（rmcp の挙動に合わせて断定）
+- `junk_stdout` → rmcp 3.1.4 は JSON でない行を読み飛ばすため成功する。テストは `Ok` か固定文言（`NarumiHandshakeFailed` / `NarumiInvalidResponse` / `TimedOut`）のいずれかであることだけを断定し、rmcp 更新で挙動が変わっても panic しないことを確認する
 - `huge` → 切り詰めと `ContentTruncated`
-- `stderr_noise` → `stderr = "discard"` で親の stderr に出ない、`inherit` で出る
+- `stderr_noise` → `discard` / `inherit` の両方で結果が変わらない（親の stderr の捕捉はテストハーネスからできないため、出力の有無は断定しない）
 - `grandchild` → cancel 後に孫が残らない（残るなら §9.3 の killpg 補助を入れてから通す）
 - URI 規約違反で子が起動しない（`exit` モードでも reason は `InvalidUri`）
 - 直列化: 2 件同時要求で子が同時に 2 つ起動せず、2 件目が `busy`
-- gaia 自身の stdout に何も混ざらない（テストプロセスの stdout を検査）
+- gaia 自身の stdout に何も混ざらないことは、`crates/gaia/tests/resolve.rs` の `gaia --json resolve` が stdout を JSON として読めることで担保する（narumi 解決器は偽 narumi が gaia-mcp のテストバイナリにしか無いため、CLI からは検証していない。残リスクとして §16 に記す）
 
 `server.rs`: `http.get_tool("resolve_source").is_some()` に反転。300 ms 待つ Stub 解決器を登録した service で `resolve_source` と `get_server_info` を同時に投げ、後者が前者の完了を待たずに返る（`spawn_blocking` の効果）
 
@@ -629,7 +630,7 @@ roots = ["/Users/<me>/Library/Application Support/narumi/meetings"]   # NARUMI_H
 
 - `tests/stdio.rs`: `tools/list` に `resolve_source` が含まれる。`tools/call resolve_source {ref_id}` で `system = minutes` が `resolved=false` になり `reference.snapshot` を含む（`isError` は false）
 - `tests/http.rs`: agent キーで `resolve_source` が呼べ、無認証は 401。`tools/list` の断定を反転
-- `tests/cli_flow.rs` または新規 `tests/resolve.rs`: `gaia add ref` → `gaia resolve --ref-id`（JSON、`resolved=false`）、`--content` の終了コード 2、`[sources.file] roots` を tempdir にした設定で `file://` の ref が `--content` で本文を出力し終了コード 0、設定から roots を消すと再起動なしで `resolved=false`（呼び出しごとの再読込）
+- 新規 `tests/resolve.rs`: `gaia add ref` → `gaia resolve --ref-id`（JSON、`resolved=false`）、`--content` の終了コード 2、`[sources.file] roots` を（設定・DB とは別の）tempdir にした設定で `file://` の ref が `--content` で本文を出力し終了コード 0、`--uri` で同じ参照が引ける、設定ディレクトリを roots に入れても `config.toml` が読めない、設定から roots を消すと再起動なしで `resolved=false`（呼び出しごとの再読込）。`gaia --json info` の `capabilities.resolvers` の変化も確認する
 
 ### 12.4 desktop
 
@@ -732,4 +733,6 @@ CHANGELOG 記載案:
 - macOS Keychain 上の企業 CA は使わない（rustls ＋ webpki-roots）。社内 CA の HTTPS は解決できない
 - MCP のリクエスト取り消しはブロッキング処理を止めない。各解決器の timeout が上限
 - `[sources]` を含む設定は 0.1.x で読めない（既定値のままなら書き出さないので、`[sources]` を触っていなければ影響しない）
+- narumi 解決器の「gaia の stdout に混ざらない」ことは stdio serve では実機で確認する（自動テストは CLI の JSON 出力と偽 narumi の統合テストに分かれており、stdio serve ＋ narumi 解決の組み合わせは未検証）
+- `killpg` は pgid の再利用窓（子の終了直後、グループが空になってから別プロセスが同じ pid で leader になるまで）で無関係なプロセスに届く可能性が理論上ある。同一 OS ユーザーの脅威モデルでは許容する
 - `Mutex<Connection>` 単一接続のため、解決前にロックを解放しても DB 操作自体は直列。解決器の permit で `spawn_blocking` プールの占有を抑える
