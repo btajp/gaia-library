@@ -262,7 +262,7 @@ fn http_auth_roles_search_and_live_key_rotation() {
     assert!(names.contains(&"search_context"));
     assert!(!names.contains(&"approve_proposal"));
     assert!(!names.contains(&"reject_proposal"));
-    assert!(!names.contains(&"resolve_source"));
+    assert!(names.contains(&"resolve_source"));
 
     let searched = agent.request(
         3,
@@ -413,4 +413,36 @@ fn generated_key_for_japanese_client_initializes_http_as_original_client() {
     assert_eq!(identity["name"], client_name);
     assert_eq!(identity["role"], "agent");
     assert_eq!(identity["default_scope"], "cloudnative");
+}
+
+#[test]
+fn http_agent_can_call_resolve_source_and_unauthenticated_calls_are_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let (agent_key, _human_key) = setup(dir.path());
+    let server = HttpServer::start(dir.path());
+    let unauthenticated = Rpc::new(&server.url, None);
+    let (status, _, _) = unauthenticated.post(json!({
+        "jsonrpc": "2.0", "id": 0, "method": "tools/call",
+        "params": {"name": "resolve_source", "arguments": {"ref_id": 1}}
+    }));
+    assert_eq!(status, 401);
+    let mut agent = Rpc::new(&server.url, Some(&agent_key));
+    agent.initialize();
+    let missing = agent.request(
+        2,
+        "tools/call",
+        json!({"name": "resolve_source", "arguments": {"ref_id": 9999}}),
+    );
+    assert_eq!(missing["result"]["isError"], true);
+    assert_eq!(
+        missing["result"]["structuredContent"]["error"]["code"],
+        "not_found"
+    );
+    let invalid = agent.request(
+        3,
+        "tools/call",
+        json!({"name": "resolve_source", "arguments": {}}),
+    );
+    assert_eq!(invalid["error"]["code"], -32602);
+    assert_eq!(invalid["error"]["data"]["code"], "invalid_params");
 }

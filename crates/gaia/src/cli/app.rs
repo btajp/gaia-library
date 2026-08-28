@@ -1,5 +1,5 @@
 //! 起動処理: 設定ロード → DB オープン → ToolService 構築 → 識別解決。
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use serde_json::Value;
@@ -9,6 +9,7 @@ use gaia_core::{
     contracts::Catalog,
     error::ToolError,
     identity::{ClientIdentity, Role},
+    sources::ProtectedPaths,
     storage::Db,
     tools::ToolService,
 };
@@ -30,12 +31,19 @@ impl App {
             );
         }
         let config = Config::load(&config_path)?;
-        let db = Db::open(&config::db_path(&config)?)?;
+        let db_path = config::db_path(&config)?;
+        let db = Db::open(&db_path)?;
         let catalog = Catalog::embedded().context("contracts のロードに失敗")?;
+        // resolve_source の解決器。設定は呼び出しごとに再読込し、設定・DB のディレクトリは file 解決器が常時拒否する。
+        let protected = ProtectedPaths::new(
+            config_path.parent().unwrap_or(Path::new("/")),
+            db_path.parent().unwrap_or(Path::new("/")),
+        );
+        let sources = gaia_mcp::sources::registry(&config_path, protected);
         Ok(Self {
             config_path,
             config,
-            service: ToolService::new(db, catalog),
+            service: ToolService::new(db, catalog).with_sources(sources),
         })
     }
 

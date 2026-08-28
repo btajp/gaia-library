@@ -91,6 +91,8 @@ pub enum Command {
     Glossary(query::GlossaryArgs),
     /// 表示名の人物突合（resolve_speakers）
     Speakers(query::SpeakersArgs),
+    /// 登録済み参照の本文取得（resolve_source）
+    Resolve(query::ResolveArgs),
     /// 更新の提案（propose_update）
     Propose(write::ProposeArgs),
     /// 提案の一覧（list_proposals）
@@ -174,6 +176,9 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         }
         Command::Speakers(a) => {
             with_app(&cli, |app, client| query::speakers(app, client, a, compact))
+        }
+        Command::Resolve(a) => {
+            with_app(&cli, |app, client| query::resolve(app, client, a, compact))
         }
         Command::Propose(a) => {
             with_app(&cli, |app, client| write::propose(app, client, a, compact))
