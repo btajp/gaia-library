@@ -91,8 +91,34 @@ fn unknown_client_does_not_issue_or_store_a_key() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     config_at(&path);
-    assert!(keygen_with(&path, "missing", |_, _| panic!("unknown client")).is_err());
+    // IssuedKey は秘密を含むため Debug を持たず、unwrap_err は使えない。
+    let error = keygen_with(&path, "missing", |_, _| panic!("unknown client")).err();
+    assert_eq!(error.as_deref(), Some("指定されたクライアントがありません"));
     assert!(Config::load(&path).unwrap().keys.is_empty());
+}
+
+#[test]
+fn invalid_config_is_reported_as_such_even_when_it_names_the_target_client() {
+    // default_client が未登録の名前を指す設定は読み込み時に UnknownClient になる。
+    // その名前を追加・再発行の対象にしても「クライアントが無い」ではなく設定の異常として伝える。
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let original = "[cli]\ndefault_client = \"ghost\"\n";
+    std::fs::write(&path, original).unwrap();
+    let expected = ConfigError::UnknownClient("ghost".into()).to_string();
+    for name in ["ghost", "other"] {
+        let error = add_with(&path, name, Role::Agent, None, true, |_, _| {
+            panic!("invalid config must not issue a key")
+        })
+        .err();
+        assert_eq!(error.as_deref(), Some(expected.as_str()));
+        let error = keygen_with(&path, name, |_, _| {
+            panic!("invalid config must not issue a key")
+        })
+        .err();
+        assert_eq!(error.as_deref(), Some(expected.as_str()));
+    }
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
 }
 
 #[test]

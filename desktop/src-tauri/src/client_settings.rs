@@ -94,7 +94,7 @@ fn add_with(
             key
         }))
     })
-    .map_err(|error| update_error(name, error))?;
+    .map_err(|error| error.to_string())?;
     Ok(key.map(|key| IssuedKey {
         storage: store_with(name, &key, store),
         key,
@@ -111,29 +111,29 @@ fn keygen_with(
     store: impl FnOnce(&str, &str) -> Result<StoreLocation, String>,
 ) -> Result<IssuedKey, String> {
     // CLI の `gaia client keygen` と同じ lock で直列化する。旧キーは保存成功時に失効する。
+    // 対象クライアントの不在は closure 内の判定だけを UI 文言にし、読み込み・検証で出た
+    // 同名の UnknownClient（default_client や [keys] が指す未登録名）は設定の異常として伝える。
+    let mut missing = false;
     let key = Config::update(path, |config| {
         if config.client(name).is_none() {
+            missing = true;
             return Err(ConfigError::UnknownClient(name.into()));
         }
         let (key, hash) = auth::generate_key(name);
         config.keys.insert(name.into(), hash);
         Ok(key)
     })
-    .map_err(|error| update_error(name, error))?;
+    .map_err(|error| {
+        if missing {
+            "指定されたクライアントがありません".into()
+        } else {
+            error.to_string()
+        }
+    })?;
     Ok(IssuedKey {
         storage: store_with(name, &key, store),
         key,
     })
-}
-
-/// 操作対象のクライアントが無い場合だけ UI 向けの文言にし、設定ファイル自体の異常はそのまま伝える。
-fn update_error(name: &str, error: ConfigError) -> String {
-    match error {
-        ConfigError::UnknownClient(unknown) if unknown == name => {
-            "指定されたクライアントがありません".into()
-        }
-        error => error.to_string(),
-    }
 }
 
 pub(crate) fn store_key(client: &str, key: &str) -> KeyStorage {
