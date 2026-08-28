@@ -28,7 +28,7 @@ v0.1 で契約だけを置いていた `resolve_source` を v0.2.0 で登録し�
 | 失敗の分類 | 入力・認可・scope・参照特定・busy だけが `ToolError`。参照が特定できた後の失敗はすべて `resolved=false` ＋ `reason`（`reference` と `snapshot` は必ず返す） | 契約の目的が「到達不能でも思い出し方を返す」こと（絶対原則 3） |
 | 同時実行 | 解決器ごとの permit（file 4 / url 2 / narumi 1）。超過は `ToolError::busy` | HTTP 経由の agent が子プロセスや外向き HTTP を並列に大量起動できないようにする |
 | 同期境界 | `GaiaServer::call_tool` と desktop `commands::call_tool`（`async fn` 化）は全ツール一律 `spawn_blocking` で `ToolService::call` を呼ぶ。`JoinError` は `internal` | 最長 30 秒のブロッキングで JSON-RPC の受信ループや他セッション・UI を止めない |
-| narumi の runtime | `NarumiResolver` が `OnceLock<tokio::runtime::Runtime>`（`new_multi_thread().worker_threads(1)`）を常駐させ、`runtime.spawn` ＋ `mpsc::recv_timeout(timeout + 5s)` で待つ。呼び出しごとの runtime 生成・破棄はしない | rmcp 3.1.4 の `ChildWithCleanup::drop` は `tokio::spawn` で kill するため、runtime を直後に drop すると kill タスクが実行されず子が残る。呼び出し元が tokio ワーカー・`spawn_blocking`・runtime 無し（CLI）のいずれでも panic しない |
+| narumi の runtime | `NarumiResolver` が `OnceLock<tokio::runtime::Runtime>`（`new_multi_thread().worker_threads(1)`）を常駐させ、`runtime.spawn` ＋ `mpsc::recv_timeout(timeout + 5s)` で待つ。呼び出しごとの runtime 生成・破棄はしない。解決器の `Drop` は runtime を `shutdown_background()` で待たずに停止する | rmcp 3.1.4 の `ChildWithCleanup::drop` は `tokio::spawn` で kill するため、runtime を直後に drop すると kill タスクが実行されず子が残る。呼び出し元が tokio ワーカー・`spawn_blocking`・runtime 無し（CLI）のいずれでも panic しない。`gaia serve` は `Runtime::block_on` の内側で `ToolService` を drop するので、通常の `Runtime` drop（待つ）だと tokio が panic する（stdio は EOF 時に exit 101、HTTP は Ctrl-C 時にワーカーが panic） |
 | narumi の子プロセス | 1 呼び出し = 1 子プロセス（起動 → initialize → `get_minutes` → `RunningService::cancel`）。成功・失敗・タイムアウトの全経路で `cancel()`（→ `graceful_shutdown`: close → 3 秒待って kill）を通す。`kill_on_drop(true)` とプロセスグループ kill を併用 | 常駐子プロセスの状態共有・ゾンビを避ける。`uv run` の孫（python）を残さない |
 | narumi への scope | **参照行の `reference.scope` を単一文字列で渡す**。呼び出し側の実効 scope 集合は渡さない | narumi の `scope` 省略は unscoped のみで実用にならない。集合を渡すと「scope A の参照から scope B の会議を引く」経路と narumi 側の横断監査が生じる。単一なので narumi の `cross_scope_read` は発火せず、gaia 側の横断は gaia の audit_log に残る |
 | narumi のエラー | `not_found` と `scope_denied` は畳まず `NarumiError { code }` として区別する | 参照の scope は呼び出し側に既知で漏えい効果が薄く、affiliation 名 ≠ narumi scope 名の設定ミスを診断できる必要がある |
@@ -478,7 +478,9 @@ fn resolve(&self, req: ResolveRequest<'_>) -> Result<Resolved, Unresolved> {
 }
 ```
 
-`Handle::block_on` / `Runtime::block_on` を使わないので、呼び出し元が tokio ワーカー・`spawn_blocking`・runtime 無し（CLI）・Tauri のどれでも panic しない。呼び出し元スレッドがブロックする間、非同期処理は常駐 runtime 上で進み、呼び出し元が先に諦めても子プロセスの終了処理は完走する。
+`Handle::block_on` / `Runtime::block_on` を使わないので、呼び出し元が tokio ワーカー・`spawn_blocking`・runtime 無し（CLI）・Tauri のどれでも解決中は panic しない。呼び出し元スレッドがブロックする間、非同期処理は常駐 runtime 上で進み、呼び出し元が先に諦めても子プロセスの終了処理は完走する。
+
+drop 時: `impl Drop for NarumiResolver` が `OnceLock::take` した runtime を `shutdown_background()` で停止する。tokio の通常の `Runtime` drop は blocking pool の終了を待つため、async コンテキスト（`gaia serve --stdio` の EOF 後・`--http` の Ctrl-C 後に `Runtime::block_on` の内側で `ToolService` が drop される経路、および tokio ワーカー上の drop）では panic する。`shutdown_background`（= `shutdown_timeout(0)`）は blocking region の判定より前に返るので、どのコンテキストでも panic しない。その時点で進行中の解決があれば完了を待たず、子プロセスは `kill_on_drop` で消える。回帰テストは `tests/narumi_resolver.rs` の `resolver_can_be_dropped_inside_an_async_context_after_use`（`spawn_blocking` 内で解決してから async 本体で drop）。
 
 ### 9.3 起動・初期化・呼び出し・終了 `async fn fetch_minutes(cfg, target, scope) -> Result<Resolved, Unresolved>`
 
@@ -560,7 +562,7 @@ roots = ["/Users/<me>/Library/Application Support/narumi/meetings"]   # NARUMI_H
 - desktop `commands::call_tool`: `pub async fn call_tool(state: State<'_, DesktopState>, name: String, args: Value) -> Result<Value, Value>` にし、`tauri::async_runtime::spawn_blocking(move || runtime.service.call(&runtime.human, &name, args).map_err(|e| e.to_json())).await` を `internal` に写す。UI の `invoke` は元々 Promise なので変更不要
 - CLI: メインスレッドで直接呼ぶ（runtime 不在でも narumi 解決器は常駐 runtime を自前で持つ）。プロセス終了時は `main` の return で終わり、子は `cancel` / drop で消える
 - DB の Mutex は §6 のとおり解決前に解放する。`spawn_blocking` プール（既定 512）の占有は解決器の permit（file 4 / url 2 / narumi 1）が抑える
-- shutdown: desktop / HTTP の停止時に進行中の解決は完了を待たない。narumi 子プロセスは `cancel` / transport drop で kill される
+- shutdown: desktop / HTTP の停止時に進行中の解決は完了を待たない。narumi 子プロセスは `cancel` / transport drop で kill される。`ToolService` の drop（`gaia serve` では `block_on` の内側）で `NarumiResolver::drop` が常駐 runtime を `shutdown_background` で待たずに止める（§9.2）
 
 ## 12. テスト一覧（narumi 無し・ネットワーク無しで全部通る）
 
@@ -736,3 +738,4 @@ CHANGELOG 記載案:
 - narumi 解決器の「gaia の stdout に混ざらない」ことは stdio serve では実機で確認する（自動テストは CLI の JSON 出力と偽 narumi の統合テストに分かれており、stdio serve ＋ narumi 解決の組み合わせは未検証）
 - `killpg` は pgid の再利用窓（子の終了直後、グループが空になってから別プロセスが同じ pid で leader になるまで）で無関係なプロセスに届く可能性が理論上ある。同一 OS ユーザーの脅威モデルでは許容する
 - `Mutex<Connection>` 単一接続のため、解決前にロックを解放しても DB 操作自体は直列。解決器の permit で `spawn_blocking` プールの占有を抑える
+- `NarumiResolver::drop` は runtime を待たずに止めるため、呼び出し元が `recv_timeout` で諦めた直後に `ToolService` が drop されると、進行中だった `cancel`（graceful shutdown）は完走しない。子は `kill_on_drop` で SIGKILL され、孫は killpg に到達しない可能性がある（通常の運用では drop はプロセス終了時のみで、その場合は子の stdin も閉じる）

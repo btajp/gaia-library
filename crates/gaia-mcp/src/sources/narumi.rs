@@ -46,7 +46,7 @@ impl NarumiResolver {
     }
 
     /// 常駐 runtime。呼び出しごとに生成・破棄しない（rmcp の子プロセス kill は `tokio::spawn` で行われるため、
-    /// runtime を直後に落とすと kill が実行されない）。
+    /// runtime を直後に落とすと kill が実行されない）。破棄は `Drop` で待たずに行う。
     fn runtime(&self) -> Result<&Runtime, String> {
         if let Some(runtime) = self.runtime.get() {
             return Ok(runtime);
@@ -58,6 +58,17 @@ impl NarumiResolver {
             .build()
             .map_err(|e| format!("cannot build narumi runtime: {e}"))?;
         Ok(self.runtime.get_or_init(|| runtime))
+    }
+}
+
+impl Drop for NarumiResolver {
+    /// `gaia serve` は `Runtime::block_on` の内側で ToolService（→ この解決器）を drop する。tokio は async
+    /// コンテキストでの「待つ drop」を panic にするため、待たずに停止する。進行中の解決があれば完了を待たない
+    /// （子プロセスは `kill_on_drop` で消える）。
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            runtime.shutdown_background();
+        }
     }
 }
 

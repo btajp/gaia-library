@@ -375,3 +375,28 @@ fn registry_serializes_narumi_calls_to_one_child() {
     worker.join().unwrap();
     assert!(registry.acquire("narumi").is_some());
 }
+
+/// `gaia serve --stdio` / `--http` は `Runtime::block_on` の内側で ToolService（→ NarumiResolver）を drop する。
+/// 常駐 runtime を async コンテキストで drop しても panic しないこと（tokio は待つ drop を禁止する）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn resolver_can_be_dropped_inside_an_async_context_after_use() {
+    let resolver = Arc::new(NarumiResolver::new());
+    let settings = settings("ok", 10, None);
+    let resolved = tokio::task::spawn_blocking({
+        let resolver = resolver.clone();
+        move || {
+            resolve(
+                &resolver,
+                &settings,
+                &format!("narumi://meeting/{ID}"),
+                "cn",
+            )
+        }
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(resolved.content.starts_with("# minutes"));
+    let resolver = Arc::try_unwrap(resolver).ok().expect("sole owner");
+    drop(resolver);
+}
