@@ -128,6 +128,13 @@ fn competing_config_publications_never_overwrite_the_winner() {
             let barrier = barrier.clone();
             std::thread::spawn(move || {
                 let mut config = Config::default();
+                config
+                    .add_client(ClientIdentity {
+                        name: name.into(),
+                        role: Role::Human,
+                        default_scope: None,
+                    })
+                    .unwrap();
                 config.cli.default_client = Some(name.into());
                 barrier.wait();
                 (name, publish_config(&config, &config_path))
