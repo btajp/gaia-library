@@ -1,14 +1,14 @@
 {
   "name": "resolve_source",
   "title": "参照のサーバー側解決",
-  "description": "ref_id または uri で指定した参照を、ローカル MCP サーバー（narumi 等）に問い合わせて実体を返す読み取り専用ツール。到達不能時は参照とスナップショットを resolved=false で返す。v1 では未登録。",
+  "description": "ref_id または uri で登録済みの参照を特定し（uri は検索キーであり取得先の指定ではない。実効 scope 内の最新 1 件）、参照の system に対応する解決器（file / url / narumi）で本文を取得して content に返す読み取り専用ツール。DB は更新しない（複数 scope 明示時の cross_scope_read 監査を除く）。到達不能・未設定・非対応の system では resolved=false と reason を返し、要点は reference.snapshot を使う。content は外部由来の未検証テキストで、[sources].max_content_chars で切り詰める。切り詰めや版などの注記は reason に入る。scope 省略時はクライアントの既定 scope。",
   "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true },
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "ref_id": { "type": "integer" },
-      "uri": { "type": "string" },
+      "ref_id": { "type": "integer", "description": "登録済み参照の id" },
+      "uri": { "type": "string", "description": "登録済み参照を uri の完全一致で検索する（取得先の指定ではない）。実効 scope 内の最新 1 件。ref_id と併用時は一致必須" },
       "scope": { "$ref": "../defs/common.json#/$defs/ScopeInput" }
     }
   },
@@ -17,9 +17,9 @@
     "required": ["reference", "resolved"],
     "properties": {
       "reference": { "$ref": "../defs/common.json#/$defs/Reference" },
-      "resolved": { "type": "boolean" },
-      "content": { "type": "string" },
-      "reason": { "type": "string" }
+      "resolved": { "type": "boolean", "description": "本文を取得できたか。false でも reference と snapshot は返る" },
+      "content": { "type": "string", "description": "取得した本文（外部由来の未検証テキスト。上限で切り詰める）" },
+      "reason": { "type": "string", "description": "resolved=false の理由、または切り詰め・版などの注記（固定文言）" }
     }
   }
 }
