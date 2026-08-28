@@ -13,9 +13,9 @@ pub fn verify_artifact(
     encoded_public_key: &str,
 ) -> Result<(), String> {
     let artifact =
-        std::fs::read(artifact_path).map_err(|_| "updater artifactを読み取れません".to_owned())?;
+        std::fs::read(artifact_path).map_err(|_| "updater 生成物を読み取れません".to_owned())?;
     let encoded_signature = std::fs::read_to_string(signature_path)
-        .map_err(|_| "updater署名を読み取れません".to_owned())?;
+        .map_err(|_| "updater 署名を読み取れません".to_owned())?;
     verify_bytes(&artifact, &encoded_signature, encoded_public_key)
 }
 
@@ -24,23 +24,23 @@ pub fn verify_bytes(
     encoded_signature: &str,
     encoded_public_key: &str,
 ) -> Result<(), String> {
-    let public_key_text = decode_tauri_value(encoded_public_key, "updater公開鍵")?;
-    let signature_text = decode_tauri_value(encoded_signature, "updater署名")?;
+    let public_key_text = decode_tauri_value(encoded_public_key, "updater 公開鍵")?;
+    let signature_text = decode_tauri_value(encoded_signature, "updater 署名")?;
     let public_key = PublicKey::decode(&public_key_text)
-        .map_err(|_| "updater公開鍵の形式が不正です".to_owned())?;
-    let signature =
-        Signature::decode(&signature_text).map_err(|_| "updater署名の形式が不正です".to_owned())?;
+        .map_err(|_| "updater 公開鍵の形式が不正です".to_owned())?;
+    let signature = Signature::decode(&signature_text)
+        .map_err(|_| "updater 署名の形式が不正です".to_owned())?;
 
     public_key
         .verify(artifact, &signature, true)
-        .map_err(|_| "updater署名が公開鍵または生成物と一致しません".to_owned())
+        .map_err(|_| "updater 署名が公開鍵または生成物と一致しません".to_owned())
 }
 
 fn decode_tauri_value(encoded: &str, label: &str) -> Result<String, String> {
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(encoded.trim())
-        .map_err(|_| format!("{label}がbase64形式ではありません"))?;
-    String::from_utf8(decoded).map_err(|_| format!("{label}がUTF-8テキストではありません"))
+        .map_err(|_| format!("{label}が base64 形式ではありません"))?;
+    String::from_utf8(decoded).map_err(|_| format!("{label}が UTF-8 テキストではありません"))
 }
 
 #[cfg(test)]
@@ -65,7 +65,7 @@ mod tests {
         let result = verify_bytes(b"changed", &encoded(SIGNATURE), &encoded(PUBLIC_KEY));
         assert_eq!(
             result,
-            Err("updater署名が公開鍵または生成物と一致しません".to_owned())
+            Err("updater 署名が公開鍵または生成物と一致しません".to_owned())
         );
     }
 
@@ -74,7 +74,7 @@ mod tests {
         let result = verify_bytes(b"test", &encoded(SIGNATURE), "not-base64");
         assert_eq!(
             result,
-            Err("updater公開鍵がbase64形式ではありません".to_owned())
+            Err("updater 公開鍵が base64 形式ではありません".to_owned())
         );
     }
 }
