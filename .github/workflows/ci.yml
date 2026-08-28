@@ -6,9 +6,11 @@ on:
 permissions:
   contents: read
 # 同一ブランチ（ref）で新しい push があったら、古い run を自動キャンセルする。
+# main は除外する: desktop ジョブの差分検出が直前 push（github.event.before）基準のため、
+# キャンセルされた push に含まれる desktop 変更が main 上で未検証のまま残らないようにする。
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
   test:
     strategy:
