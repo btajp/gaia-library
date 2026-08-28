@@ -5,7 +5,7 @@ import "../test/tauriMock";
 import { engagementOutput, fact, organizationOutput, personOutput, reference, searchOutput } from "../test/contextFixtures";
 
 const { default: FactList } = await import("./FactList");
-const { default: RefList } = await import("./RefList");
+const { default: RefList, ResolvedContent } = await import("./RefList");
 const { default: SearchResults } = await import("./SearchResults");
 const { default: DetailContent } = await import("./DetailContent");
 const { default: Search } = await import("./Search");
@@ -152,5 +152,40 @@ describe("typed detail views", () => {
     expect(html).toContain("検索へ戻る");
     expect(html).toContain("対象 scope: personal");
     expect(html).not.toContain("人物サンプル");
+  });
+});
+
+describe("reference resolution view", () => {
+
+  it("offers a resolve action next to the copy action without opening the URI", () => {
+    const html = render(RefList, { refs: [reference] });
+    expect(html).toContain("内容を取得");
+    expect(html).toContain("URI をコピー");
+    expect(html).not.toContain("href=");
+  });
+
+  it("renders resolved content as escaped text with the note", () => {
+    const html = render(ResolvedContent, { result: { reference, resolved: true, content: "<script>alert(1)</script>\n# 見出し", reason: "content truncated to 10 of 20 chars" } });
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("注記: content truncated to 10 of 20 chars");
+    expect(html).toContain("# 見出し");
+  });
+
+  it("shows the reason and opens the snapshot when the source could not be resolved", () => {
+    const html = render(ResolvedContent, { result: { reference, resolved: false, reason: "resolver `narumi` is not configured (set [sources.narumi].command); fallback: see reference.snapshot" } });
+    expect(html).toContain("取得できませんでした");
+    expect(html).toContain("resolver `narumi` is not configured");
+    expect(html).toContain("<details open");
+    expect(html).toContain(reference.snapshot);
+    expect(html).not.toContain("<pre");
+  });
+
+  it("handles missing snapshot and reason without displaying undefined", () => {
+    const { snapshot, ...noSnapshot } = reference;
+    const html = render(ResolvedContent, { result: { reference: noSnapshot, resolved: false } });
+    expect(html).toContain("理由は不明です");
+    expect(html).not.toContain("undefined");
+    expect(html).not.toContain("<details");
   });
 });

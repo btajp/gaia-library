@@ -146,6 +146,11 @@ fn fallback_root(lookup: Lookup<'_>) -> Result<PathBuf, String> {
     Ok(base.join(APP_DIR).join("keys"))
 }
 
+/// 現在の環境でのキー退避ディレクトリ。file 解決器の常時拒否領域として使う（存在しなくてよい）。
+pub fn fallback_root_for_current_env() -> Option<PathBuf> {
+    fallback_root(&|name| std::env::var_os(name)).ok()
+}
+
 fn key_filename(client: &str) -> String {
     format!("{}.key", hash_key(client))
 }

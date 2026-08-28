@@ -6,6 +6,8 @@ import type {
   GetEngagementOutput,
   GetOrganizationOutput,
   GetPersonOutput,
+  Reference,
+  ResolveSourceOutput,
   SearchContextOutput,
 } from "./types";
 
@@ -78,4 +80,14 @@ export async function copyReferenceUri(
   } catch {
     throw new Error("URI をコピーできませんでした。URI を選択してコピーしてください。");
   }
+}
+
+export const RESOLVE_TIMEOUT_NOTE = "取得中…（最長 30 秒）";
+
+/// 参照自身の scope で resolve_source を呼ぶ（横断にならない）。結果は呼び出し側の state にだけ置く。
+export async function resolveReference(reference: Reference): Promise<ResolveSourceOutput> {
+  if (!Number.isInteger(reference.id) || reference.id < 1) throw new Error("参照 ID が不正です。");
+  const scope = reference.scope.trim();
+  if (!scope) throw new Error("参照の scope が不明なため取得できません。");
+  return callTool<ResolveSourceOutput>("resolve_source", { ref_id: reference.id, scope });
 }

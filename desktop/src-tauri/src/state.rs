@@ -1,7 +1,7 @@
 //! 常に一つだけ manage する状態コンテナ。未設定・起動失敗も UI から判別できる。
 use std::{
     ffi::OsString,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, RwLock,
         atomic::{AtomicBool, Ordering},
@@ -13,6 +13,7 @@ use gaia_core::{
     config::{self, Config},
     contracts::Catalog,
     identity::{ClientIdentity, Role},
+    sources::{ProtectedPaths, SourceRegistry},
     storage::Db,
     tools::ToolService,
 };
@@ -20,7 +21,19 @@ use gaia_mcp::BoundServer;
 use serde::Serialize;
 use tokio::sync::Mutex;
 
-use crate::{client_settings, first_run};
+use crate::{client_settings, first_run, keychain};
+
+/// resolve_source の解決器。設定は呼び出しごとに読み直し、設定・DB・キー退避ディレクトリは file 解決器が常時拒否する。
+pub(crate) fn sources_for(config_path: &Path, db_path: &Path) -> SourceRegistry {
+    let mut protected = ProtectedPaths::new(
+        config_path.parent().unwrap_or(Path::new("/")),
+        db_path.parent().unwrap_or(Path::new("/")),
+    );
+    if let Some(keys) = keychain::fallback_root_for_current_env() {
+        protected = protected.with_extra(keys);
+    }
+    gaia_mcp::sources::registry(config_path, protected)
+}
 
 #[derive(Serialize)]
 pub struct SetupResponse {
@@ -124,8 +137,9 @@ fn load_initialization(
     let human = select_human(&config)?;
     let catalog = Catalog::embedded().map_err(|e| e.to_string())?;
     let db = Db::open(&db_path).map_err(|e| e.to_string())?;
+    let sources = sources_for(&config_path, &db_path);
     let app_state = AppState::new(
-        Arc::new(ToolService::new(db, catalog)),
+        Arc::new(ToolService::new(db, catalog).with_sources(sources)),
         human,
         config_path,
         db_path,

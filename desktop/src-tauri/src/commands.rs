@@ -36,7 +36,7 @@ pub(crate) async fn first_run_setup(
 }
 
 #[tauri::command]
-pub fn call_tool(
+pub async fn call_tool(
     state: State<'_, DesktopState>,
     name: String,
     args: Value,
@@ -44,10 +44,18 @@ pub fn call_tool(
     let runtime = state
         .runtime()
         .map_err(|error| ToolError::internal(error).to_json())?;
-    runtime
-        .service
-        .call(&runtime.human, &name, args)
-        .map_err(|error| error.to_json())
+    // ToolService::call は同期。resolve_source のように最長数十秒ブロックするツールがあるため、
+    // 全ツール一律でブロッキング用スレッドへ逃がし、画面や他のコマンドを止めない。
+    tauri::async_runtime::spawn_blocking(move || {
+        runtime
+            .service
+            .call(&runtime.human, &name, args)
+            .map_err(|error| error.to_json())
+    })
+    .await
+    .unwrap_or_else(|error| {
+        Err(ToolError::internal(format!("tool task did not complete: {error}")).to_json())
+    })
 }
 
 #[tauri::command]

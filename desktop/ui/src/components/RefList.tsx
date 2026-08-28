@@ -1,14 +1,39 @@
 import { useEffect, useRef, useState } from "react";
 import { errorMessage } from "../api";
-import { copyReferenceUri } from "../contextApi";
-import type { Reference } from "../types";
+import { RESOLVE_TIMEOUT_NOTE, copyReferenceUri, resolveReference } from "../contextApi";
+import type { Reference, ResolveSourceOutput } from "../types";
 import Badge from "./Badges";
+
+function ResolvedContent({ result }: { result: ResolveSourceOutput }) {
+  if (result.resolved) {
+    return (
+      <div className="mt-3 rounded-md border border-neutral-700 bg-neutral-950 p-3 text-sm" aria-label="取得した内容">
+        {result.reason && <p className="mb-2 text-xs text-neutral-400">注記: {result.reason}</p>}
+        <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-neutral-200">{result.content ?? ""}</pre>
+      </div>
+    );
+  }
+  return (
+    <div role="status" className="mt-3 rounded-md border border-amber-700 bg-amber-950/40 p-3 text-sm text-amber-200">
+      <p>取得できませんでした: {result.reason ?? "理由は不明です"}</p>
+      {result.reference.snapshot && (
+        <details open className="mt-2 text-amber-100">
+          <summary className="cursor-pointer">要点スナップショット（フォールバック）</summary>
+          <p className="mt-2 whitespace-pre-wrap break-words">{result.reference.snapshot}</p>
+        </details>
+      )}
+    </div>
+  );
+}
 
 function ReferenceRow({ reference }: { reference: Reference }) {
   const [busy, setBusy] = useState(false);
+  const [resolving, setResolving] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [resolved, setResolved] = useState<ResolveSourceOutput | null>(null);
   const pending = useRef(false);
+  const resolvePending = useRef(false);
   const mounted = useRef(false);
 
   useEffect(() => {
@@ -33,6 +58,23 @@ function ReferenceRow({ reference }: { reference: Reference }) {
     }
   }
 
+  async function resolve() {
+    if (resolvePending.current) return;
+    resolvePending.current = true;
+    setResolving(true);
+    setError(null);
+    try {
+      // 結果は state に持つだけで localStorage やログには保存しない。
+      const result = await resolveReference(reference);
+      if (mounted.current) setResolved(result);
+    } catch (cause) {
+      if (mounted.current) setError(errorMessage(cause));
+    } finally {
+      resolvePending.current = false;
+      if (mounted.current) setResolving(false);
+    }
+  }
+
   return (
     <li className="rounded-md border border-neutral-800 p-3">
       <div className="flex flex-wrap gap-2">
@@ -53,11 +95,17 @@ function ReferenceRow({ reference }: { reference: Reference }) {
           <p className="mt-2 whitespace-pre-wrap break-words text-neutral-400">{reference.snapshot}</p>
         </details>
       )}
-      <button type="button" onClick={copy} disabled={busy} className="mt-3 rounded border border-neutral-700 px-3 py-1 text-xs hover:bg-neutral-800 disabled:opacity-50">
-        {busy ? "コピー中…" : "URI をコピー"}
-      </button>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button type="button" onClick={copy} disabled={busy} className="rounded border border-neutral-700 px-3 py-1 text-xs hover:bg-neutral-800 disabled:opacity-50">
+          {busy ? "コピー中…" : "URI をコピー"}
+        </button>
+        <button type="button" onClick={resolve} disabled={resolving} className="rounded border border-neutral-700 px-3 py-1 text-xs hover:bg-neutral-800 disabled:opacity-50">
+          {resolving ? RESOLVE_TIMEOUT_NOTE : "内容を取得"}
+        </button>
+      </div>
       {feedback && <p role="status" className="mt-2 text-xs text-neutral-300">{feedback}</p>}
       {error && <p role="alert" className="mt-2 text-xs text-red-300">{error}</p>}
+      {resolved && <ResolvedContent result={resolved} />}
     </li>
   );
 }
@@ -72,3 +120,5 @@ export default function RefList({ refs }: { refs: Reference[] }) {
     </ul>
   );
 }
+
+export { ResolvedContent };
