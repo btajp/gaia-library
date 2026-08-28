@@ -152,7 +152,13 @@ fn competing_config_publications_never_overwrite_the_winner() {
     assert_eq!(winners.len(), 1);
     let saved = Config::load(&config_path).unwrap();
     assert_eq!(saved.cli.default_client.as_deref(), Some(winners[0].0));
-    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    // 敗者の一時ファイルを残さない。設定本体と兄弟 lock file 以外は存在しない。
+    let leftovers: Vec<_> = fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| name != "config.toml" && name != "config.toml.lock")
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
 }
 
 #[cfg(unix)]

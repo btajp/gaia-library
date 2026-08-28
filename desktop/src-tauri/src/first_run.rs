@@ -4,7 +4,7 @@ use std::{fs, io, path::Path, sync::Arc};
 use gaia_core::{
     admin,
     auth::generate_key,
-    config::{CliConfig, Config},
+    config::{CliConfig, Config, ConfigError},
     contracts::Catalog,
     identity::{ClientIdentity, Role},
     storage::Db,
@@ -100,25 +100,16 @@ fn required<'a>(value: &'a str, label: &str) -> Result<&'a str, String> {
 }
 
 fn publish_config(config: &Config, path: &Path) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    let temporary = tempfile::Builder::new()
-        .prefix(".gaia-setup-")
-        .tempdir_in(parent)
-        .map_err(|e| e.to_string())?;
-    let staged = temporary.path().join("config.toml");
-    config.save(&staged).map_err(|e| e.to_string())?;
-    // 同じファイルシステム上で原子的に公開する。存在する通常ファイル・リンクは拒否する。
-    fs::hard_link(&staged, path).map_err(|error| {
-        if error.kind() == io::ErrorKind::AlreadyExists {
-            "設定が既にあります。初回設定では上書きできません".into()
-        } else {
-            format!("初期設定の保存に失敗しました: {error}")
-        }
-    })
+    // CLI の `gaia init` や設定更新と同じ兄弟 lock file で直列化し、
+    // 存在する通常ファイル・リンク（dangling symlink を含む）は置き換えない。
+    config
+        .create_with::<(), ConfigError>(path, || Ok(()))
+        .map_err(|error| match error {
+            ConfigError::AlreadyExists(_) => {
+                "設定が既にあります。初回設定では上書きできません".into()
+            }
+            error => format!("初期設定の保存に失敗しました: {error}"),
+        })
 }
 
 #[cfg(test)]
