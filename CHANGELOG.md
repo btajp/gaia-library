@@ -7,6 +7,17 @@
 
 今後の変更をこの節に追記する。
 
+## [0.2.1] - 2026-08-29
+
+### Fixed
+
+- デスクトップの参照カードで「内容を取得」を再実行した時に、前回の取得内容と URI コピーの通知を取得開始の時点で消すようにした。取得に失敗した場合に前回の内容が新しいエラーと並んで表示されなくなる。
+
+### Changed
+
+- README の `[sources.narumi]` 設定例を `uv run --project <narumi のチェックアウト> narumi-server --stdio-bridge` にし、`narumi.app` を使う場合は `--stdio-bridge`（常駐サーバーへの橋渡し）を推奨、`--stdio` は `narumi.app` を起動していない開発用途向け（独立した開発用サーバー。接続管理・秘密入力は不可）と明記した。
+- 設計書 `docs/superpowers/specs/2026-08-29-gaia-library-resolve-source-design.md` §15 に、narumi 0.3.0（契約 3.0.0）との実機確認の記録を追記した。`--stdio` 経路で handshake / `get_minutes` / `not_found` / `scope_denied` / 終了処理を確認済み。`--stdio-bridge` 経路は未検証。
+
 ## [0.2.0] - 2026-08-29
 
 ### Added
