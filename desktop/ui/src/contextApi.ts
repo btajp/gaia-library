@@ -28,6 +28,10 @@ export function detailKey(target: DetailTarget, scope: string): string {
   return JSON.stringify([target.type, target.id, scope.trim()]);
 }
 
+export function resolveKey(reference: Pick<Reference, "id" | "scope">): string {
+  return JSON.stringify([reference.scope.trim(), reference.id]);
+}
+
 export function isDetailType(type: string): type is DetailType {
   return type === "person" || type === "organization" || type === "engagement";
 }

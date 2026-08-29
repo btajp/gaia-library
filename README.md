@@ -90,7 +90,7 @@ max_redirects = 3
 
 [sources.narumi]                     # narumi://meeting/<meeting_id>[?version=<n>] の参照
 command = "/opt/homebrew/bin/uv"     # 絶対パス。`which uv` の結果
-args = ["--directory", "/path/to/narumi", "run", "narumi-server", "--stdio-bridge"]
+args = ["--directory", "/path/to/narumi", "run", "narumi-server", "--stdio-bridge"]   # narumi.app の常駐サーバーへ接続する。/path/to/narumi は narumi のチェックアウト
 timeout_secs = 30                    # initialize と get_minutes の上限。子プロセスの終了処理は別に最長 3 秒（呼び出しは timeout + 5 秒まで待つ）
 max_bytes = 1048576                  # get_minutes 応答の markdown の上限（バイト）。超過は本文を返さない
 stderr = "discard"                   # "inherit" で narumi のログを gaia の stderr に流す
@@ -100,7 +100,7 @@ NARUMI_HOME = "/Users/<me>/Library/Application Support/narumi"
 
 - `file`: `roots` は絶対パスのディレクトリ。symlink で外へ出る参照、ディレクトリ、バイナリ、`max_bytes` 超は読まない。設定ファイル・DB・アプリのキー退避ディレクトリは `roots` に入れても常に対象外。現行の narumi が登録する `file://` の議事録参照は、`roots` に narumi の `meetings` ディレクトリ（`NARUMI_HOME` 配下）を入れると読める。
 - `url`: 公開テキスト向け。`localhost`・プライベート・リンクローカル・メタデータ IP は DNS 解決後でも拒否し、リダイレクトも各段で検査する。`allow_hosts = ["*"]` はエージェントが任意の公開ホストへ GET できる状態（URL クエリ経由の持ち出し経路になり得る）なので、必要なホストだけを指定する。Notion / Box などはエージェント側のコネクタで開く。
-- `narumi`: `narumi.app` を起動した状態で `--stdio-bridge` を使う（常駐サーバーへの橋渡し）。`uv` の代わりに venv 内の `narumi-server` 実行ファイルを直接指定してもよい（孫プロセスと uv の暗黙取得を避けられる）。narumi の scope 名は gaia の所属元名（affiliation）と一致させる。narumi 参照の登録規約（`system = "narumi"`, `uri = "narumi://meeting/<meeting_id>?version=<n>"`, `snapshot` 必須）は設計書 `docs/superpowers/specs/2026-08-29-gaia-library-resolve-source-design.md` §10 を参照。
+- `narumi`: `narumi-server` の起動形は 2 つある。`narumi.app` を使っている場合は `--stdio-bridge` を推奨する（起動済みの常駐サーバーへ接続する MCP クライアント用の橋渡し。narumi.app を先に起動しておく）。`--stdio` は narumi.app を起動していない開発用途向けで、独立した開発用サーバーとしてデータルートを直接開く（接続管理・秘密入力は不可）。`uv` の代わりに venv 内の `narumi-server` 実行ファイルを直接指定してもよい（孫プロセスと uv の暗黙取得を避けられる）。narumi の scope 名は gaia の所属元名（affiliation）と一致させる。narumi 参照の登録規約（`system = "narumi"`, `uri = "narumi://meeting/<meeting_id>?version=<n>"`, `snapshot` 必須）は設計書 `docs/superpowers/specs/2026-08-29-gaia-library-resolve-source-design.md` §10 を参照。
 - `[sources]` を書いた設定ファイルは 0.1.x では読めない。戻す場合は `[sources]` の節を削除する（既定値のままなら書き出されない）。
 
 ```sh

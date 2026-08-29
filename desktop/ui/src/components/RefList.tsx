@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { errorMessage } from "../api";
-import { RESOLVE_PENDING_NOTE, copyReferenceUri, resolveReference } from "../contextApi";
+import { RESOLVE_PENDING_NOTE, copyReferenceUri, resolveKey, resolveReference } from "../contextApi";
+import { useLatestRequest } from "../hooks/useLatestRequest";
+import { snapshotForKey } from "../lib/latestRequest";
 import type { Reference, ResolveSourceOutput } from "../types";
 import Badge from "./Badges";
 
@@ -28,12 +30,15 @@ function ResolvedContent({ result }: { result: ResolveSourceOutput }) {
 
 function ReferenceRow({ reference }: { reference: Reference }) {
   const [busy, setBusy] = useState(false);
-  const [resolving, setResolving] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [resolved, setResolved] = useState<ResolveSourceOutput | null>(null);
+  // 取得結果は LatestRequest に持つ。新しい取得の開始時と失敗時に前回の内容が消える（Search / Detail と同じ流儀）。
+  const { request, snapshot } = useLatestRequest<ResolveSourceOutput>();
+  const resolution = snapshotForKey(snapshot, resolveKey(reference));
+  const resolving = resolution?.status === "loading";
+  const resolved = resolution?.status === "success" ? resolution.data : null;
+  const resolveError = resolution?.status === "error" ? errorMessage(resolution.error) : null;
   const pending = useRef(false);
-  const resolvePending = useRef(false);
   const mounted = useRef(false);
 
   useEffect(() => {
@@ -58,21 +63,13 @@ function ReferenceRow({ reference }: { reference: Reference }) {
     }
   }
 
-  async function resolve() {
-    if (resolvePending.current) return;
-    resolvePending.current = true;
-    setResolving(true);
+  function resolve() {
+    if (request.getSnapshot().status === "loading") return;
+    // 前回の取得内容・コピー結果・エラーを消してから取得を始める（失敗時に新しいエラーと並ばない）。
+    setFeedback(null);
     setError(null);
-    try {
-      // 結果は state に持つだけで localStorage やログには保存しない。
-      const result = await resolveReference(reference);
-      if (mounted.current) setResolved(result);
-    } catch (cause) {
-      if (mounted.current) setError(errorMessage(cause));
-    } finally {
-      resolvePending.current = false;
-      if (mounted.current) setResolving(false);
-    }
+    // 結果は request の snapshot に持つだけで localStorage やログには保存しない。
+    void request.run(resolveKey(reference), () => resolveReference(reference));
   }
 
   return (
@@ -105,6 +102,7 @@ function ReferenceRow({ reference }: { reference: Reference }) {
       </div>
       {feedback && <p role="status" className="mt-2 text-xs text-neutral-300">{feedback}</p>}
       {error && <p role="alert" className="mt-2 text-xs text-red-300">{error}</p>}
+      {resolveError && <p role="alert" className="mt-2 text-xs text-red-300">{resolveError}</p>}
       {resolved && <ResolvedContent result={resolved} />}
     </li>
   );

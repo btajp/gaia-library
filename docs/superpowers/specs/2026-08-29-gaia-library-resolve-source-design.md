@@ -726,6 +726,11 @@ CHANGELOG 記載案:
 6. `narumi.app` を終了して同じ参照を解決すると `NarumiHandshakeFailed` の文言と snapshot が返り、`ps` に子が残らない
 7. デスクトップで同じ参照の「内容を取得」を押し、取得中に検索など他の操作が固まらない
 
+手動確認の記録（2026-08-29、narumi 0.3.0 / 契約 3.0.0）:
+
+- 確認した経路は `narumi-server --stdio`（narumi.app を起動せず、独立した開発用サーバーがデータルートを直接開く形。接続管理・秘密入力は不可）。`[sources.narumi]` の `command` / `args` にこの起動形を書き、gaia の narumi 解決器で次が成功した: handshake（initialize 応答の `serverInfo.name` は `narumi`）/ `get_minutes` / `not_found` / `scope_denied` / 終了処理
+- 未検証: `--stdio-bridge`（narumi.app の常駐サーバーへの橋渡し）。README の推奨設定はこちらだが、bridge 経由の handshake（`serverInfo.name` を含む）・`get_minutes`・終了処理は本記録の時点で実機確認していない。§16 の「`--stdio-bridge` が `serverInfo.name` を書き換えていないこと」は未解消のまま
+
 ## 16. リスクと未検証事項
 
 - process-wrap 9.0 のプロセスグループ / kill-on-drop ラッパーの API 名は未検証（ローカル registry に無い）。実装時に `cargo fetch` して確認し、`grandchild` テストで `uv run` の孫が残らないことを観測する。残る場合は unix の `libc::killpg` を gaia-mcp に足す。README では `uv run` の代わりに venv 内の `narumi-server` 実行ファイルを直接指定する選択肢も案内する（孫プロセスと uv の暗黙ネットワーク取得を避ける）

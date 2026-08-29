@@ -157,6 +157,45 @@ describe("reference resolution", () => {
     await expect(context.resolveReference(reference)).rejects.toBeInstanceOf(GaiaError);
   });
 
+  it("clears the previous content as soon as a new fetch starts", async () => {
+    const { reference } = await import("./test/contextFixtures");
+    const key = context.resolveKey(reference);
+    invoke.mockResolvedValueOnce({ reference, resolved: true, content: "前回の本文" });
+    const request = new LatestRequest();
+    await request.run(key, () => context.resolveReference(reference));
+    expect(snapshotForKey(request.getSnapshot(), key).data.content).toBe("前回の本文");
+    let resolveNext;
+    invoke.mockImplementationOnce(() => new Promise((resolve) => { resolveNext = resolve; }));
+    const running = request.run(key, () => context.resolveReference(reference));
+    expect(request.getSnapshot()).toEqual({ key, status: "loading", data: null, error: null });
+    resolveNext({ reference, resolved: true, content: "新しい本文" });
+    await running;
+    expect(snapshotForKey(request.getSnapshot(), key).data.content).toBe("新しい本文");
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not keep the previous content next to the error after a failed fetch", async () => {
+    const { reference } = await import("./test/contextFixtures");
+    const key = context.resolveKey(reference);
+    invoke.mockResolvedValueOnce({ reference, resolved: true, content: "前回の本文" });
+    invoke.mockRejectedValueOnce({ code: "busy", message: "resolver `narumi` is busy; retry later" });
+    const request = new LatestRequest();
+    await request.run(key, () => context.resolveReference(reference));
+    await request.run(key, () => context.resolveReference(reference));
+    const failed = snapshotForKey(request.getSnapshot(), key);
+    expect(failed.status).toBe("error");
+    expect(failed.data).toBeNull();
+    expect(failed.error).toBeInstanceOf(GaiaError);
+    expect(failed.error.code).toBe("busy");
+  });
+
+  it("keys the resolution by the reference's own id and trimmed scope", async () => {
+    const { reference } = await import("./test/contextFixtures");
+    expect(context.resolveKey({ ...reference, scope: " personal " })).toBe(context.resolveKey(reference));
+    expect(context.resolveKey({ ...reference, id: reference.id + 1 })).not.toBe(context.resolveKey(reference));
+    expect(context.resolveKey({ ...reference, scope: "other" })).not.toBe(context.resolveKey(reference));
+  });
+
   it("shows a pending note that does not promise a fixed timeout", () => {
     // 上限は [sources] の設定次第なので、UI の文言に秒数を含めない
     expect(context.RESOLVE_PENDING_NOTE).toBe("取得中…（時間がかかることがあります）");
