@@ -626,7 +626,7 @@ roots = ["/Users/<me>/Library/Application Support/narumi/meetings"]   # NARUMI_H
 - 直列化: 2 件同時要求で子が同時に 2 つ起動せず、2 件目が `busy`
 - gaia 自身の stdout に何も混ざらないことは、`crates/gaia/tests/resolve.rs` の `gaia --json resolve` が stdout を JSON として読めることで担保する（narumi 解決器は偽 narumi が gaia-mcp のテストバイナリにしか無いため、CLI からは検証していない。残リスクとして §16 に記す）
 
-`server.rs`: `http.get_tool("resolve_source").is_some()` に反転。300 ms 待つ Stub 解決器を登録した service で `resolve_source` と `get_server_info` を同時に投げ、後者が前者の完了を待たずに返る（`spawn_blocking` の効果）
+`server.rs`: `http.get_tool("resolve_source").is_some()` に反転。開始を通知してから Barrier で止まる Stub 解決器を登録した service で `resolve_source` を投げ、解決器が止まっている間に `get_server_info` が返ることを順序で断定してから Barrier を解放する（`spawn_blocking` の効果。壁時計には依存しない）
 
 `http/tests/stateless.rs`: 未知ツール列から `resolve_source` を外し、`resolve_source` に `{}` を投げると 400 / `-32602` / `data.code == "invalid_params"` でセッションを作らないことを別に断定
 
