@@ -45,6 +45,7 @@
 
 - キー発行: `gaia client add <name> --role agent --default-scope <scope> --generate-key` または `gaia client keygen <name>`。平文は stdout に 1 行、config の `[keys]` にはハッシュのみ保存する
 - 起動: `gaia serve --http --port <N>`。未指定時は `[server].port`、それもなければ 4111〜4114 を試す。`--port 0` は空きポートを選ぶ
+- 改名: `gaia client rename <old> <new>`（desktop は設定画面の「名前を変更…」）。`Config::rename_client` が `Config::update` の lock 内で `[[clients]].name` / `[cli].default_client` / `[keys]` の参照だけを付け替える（キーのハッシュは不変で HTTP のキーは有効なまま。stdio の接続設定は `--client <new>` で出し直す）。DB の履歴（proposals の proposed_by / decided_by、audit_log の actor）は書き換えない。desktop は Keychain / 退避ファイルの保管キー（クライアント名が鍵）も新名へ移し、human は設定を都度読み直すため改名後の承認は新名で記録される
 - キー平文は `gaia_<接頭辞>_<32 桁 hex>`。接頭辞はクライアント名から Bearer token に使える ASCII（英数字と `-._~+/`）だけを残した最大 64 文字（空なら `client`）で、識別には使わずハッシュ照合だけで行う。元のクライアント名は変更しない
 - 設定出力: `gaia client mcp-config <name> --transport http --port <N> --key-stdin`（キーは標準入力で渡す。互換用の `--key <key>` は履歴・プロセス引数へ露出するため非推奨）。現在のキーと固定・非ゼロポートが必要で、起動側と同じポートを使う。stdio の設定出力は使用中の config / DB の絶対パスを含む
 - CLI の HTTP サーバーは `AuthTable::from_path` を使い、設定をリクエストごとに読み直す。再発行後は次のリクエストから旧キーを拒否し、読み込み失敗時も認証を拒否する。受理済みリクエストは強制終了しない
