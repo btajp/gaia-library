@@ -7,6 +7,18 @@
 
 今後の変更をこの節に追記する。
 
+## [0.2.2] - 2026-08-29
+
+### Added
+
+- クライアント名の変更を追加した。CLI は `gaia client rename <旧名> <新名>`（`--json` 対応）、デスクトップは設定画面のクライアントカードの「名前を変更…」。役割・既定 scope・API キー（ハッシュ）を引き継ぎ、`[cli].default_client` が旧名なら新名へ追従する。HTTP のキーは有効なまま、stdio の接続設定は `--client <新名>` で出し直す。DB の履歴（提案の `proposed_by` / `decided_by`、監査ログの actor）は書き換えない。デスクトップは Keychain / 退避ファイルに保管中のキーも新しい名前へ移し、アプリ自身の human を改名した場合も以降の承認・却下を新名で記録する（設定を呼び出しごとに読み直す）。
+
+### Changed
+
+- README の `[sources.narumi]` を「narumi.app を使う場合（`--stdio-bridge`）」と「チェックアウトの開発サーバー（`--stdio`）を使う場合」の 2 例に整理した。narumi.app の bridge は `[sources.narumi.env]` に同梱の `narumi-keychain` ヘルパーと契約ディレクトリの指定が必須で、env 無しでは `authentication_required` で失敗する。失敗時の固定文言と切り分け（`stderr = "inherit"`、`RUST_LOG=warn`）を追記した。
+- 設計書 `docs/superpowers/specs/2026-08-29-gaia-library-resolve-source-design.md` §15 に、`--stdio-bridge` の実機確認の記録（0.2.1 の README 推奨形は `authentication_required`、同梱ヘルパーの env 指定で `initialize` 成功、`serverInfo.name` は `narumi`）を追記した。
+- AGENTS.md の「HTTP 接続とキー管理」に `gaia client rename` と履歴を書き換えない規則を追記した。
+
 ## [0.2.1] - 2026-08-29
 
 ### Fixed
