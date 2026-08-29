@@ -31,7 +31,7 @@ export default function Search({ scope, openDetail }: Props) {
     <div className="space-y-5">
       <div>
         <h2 className="text-xl font-semibold">検索</h2>
-        <p className="mt-2 text-sm leading-6 text-neutral-400">登録した記憶の索引を検索します。結果は選択中の scope（機密境界）の中だけから返ります。</p>
+        <p className="mt-2 text-sm leading-6 text-neutral-400">登録した記憶の索引を検索します。案件・facts・用語・やり取りは選択中の scope（機密境界）の中だけから返ります。人物・組織などの名前の索引（名寄せ）は scope をまたいで共有です。</p>
       </div>
       <form onSubmit={submit} className="space-y-3" aria-busy={busy}>
         <div>

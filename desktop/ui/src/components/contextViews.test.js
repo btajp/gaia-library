@@ -104,7 +104,8 @@ describe("search results", () => {
   it("labels the search input and blocks empty submission", () => {
     const html = render(Search, { scope: "personal", openDetail });
     expect(html).toContain("登録した記憶の索引を検索します");
-    expect(html).toContain("選択中の scope（機密境界）の中だけから返ります");
+    expect(html).toContain("案件・facts・用語・やり取りは選択中の scope（機密境界）の中だけから返ります");
+    expect(html).toContain("名前の索引（名寄せ）は scope をまたいで共有です");
     expect(html).toContain('for="search-query"');
     expect(html).toContain('for="search-limit"');
     expect(html).toContain('type="submit" disabled=""');
