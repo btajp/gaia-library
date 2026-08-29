@@ -436,3 +436,32 @@ async fn http_request(url: &str, key: &str) -> String {
     .await
     .unwrap()
 }
+
+#[test]
+fn protected_paths_include_config_db_and_the_key_fallback_directory() {
+    let config_path = Path::new("/cfg/gaia-library/config.toml");
+    let db_path = Path::new("/data/gaia-library/gaia.db");
+    let protected = protected_paths(config_path, db_path, &|name| match name {
+        "XDG_DATA_HOME" => Some("/xdg".into()),
+        "HOME" => Some("/h".into()),
+        _ => None,
+    });
+    assert_eq!(protected.config_dir, Path::new("/cfg/gaia-library"));
+    assert_eq!(protected.db_dir, Path::new("/data/gaia-library"));
+    // keychain::fallback_root と同じ場所（gaia-core の config::key_store_dir_with で算出）
+    assert_eq!(
+        protected.extra,
+        vec![PathBuf::from("/xdg/gaia-library/keys")]
+    );
+    let protected = protected_paths(config_path, db_path, &|name| match name {
+        "HOME" => Some("/h".into()),
+        _ => None,
+    });
+    assert_eq!(
+        protected.extra,
+        vec![PathBuf::from("/h/.local/share/gaia-library/keys")]
+    );
+    // 退避先を決められない環境では設定・DB のディレクトリだけを拒否する
+    let protected = protected_paths(config_path, db_path, &|_| None);
+    assert!(protected.extra.is_empty());
+}

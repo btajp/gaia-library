@@ -136,3 +136,10 @@ export type DetailResult =
   | { type: "person"; data: GetPersonOutput }
   | { type: "organization"; data: GetOrganizationOutput }
   | { type: "engagement"; data: GetEngagementOutput };
+
+export type ResolveSourceOutput = {
+  reference: Reference;
+  resolved: boolean;
+  content?: string;
+  reason?: string;
+};

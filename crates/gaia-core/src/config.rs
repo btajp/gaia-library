@@ -30,6 +30,9 @@ pub struct Config {
     pub keys: BTreeMap<String, String>,
     #[serde(default)]
     pub server: ServerConfig,
+    /// resolve_source の解決器設定。既定値のままなら書き出さない（0.1.x でも読める設定を保つ）。
+    #[serde(default, skip_serializing_if = "SourcesConfig::is_default")]
+    pub sources: SourcesConfig,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -46,8 +49,343 @@ pub struct ServerConfig {
     pub port: Option<u16>,
 }
 
+/// `[sources]`。既定は全解決器が無効（default deny / explicit allow）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SourcesConfig {
+    /// content の上限（Unicode スカラー数）。
+    #[serde(default = "SourcesConfig::default_max_content_chars")]
+    pub max_content_chars: usize,
+    #[serde(default)]
+    pub file: FileSourceConfig,
+    #[serde(default)]
+    pub url: UrlSourceConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub narumi: Option<NarumiSourceConfig>,
+}
+
+/// `[sources.file]`。`roots` が空なら無効。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FileSourceConfig {
+    /// 読み取りを許可する絶対パスのディレクトリ。
+    #[serde(default)]
+    pub roots: Vec<PathBuf>,
+    #[serde(default = "FileSourceConfig::default_max_bytes")]
+    pub max_bytes: u64,
+}
+
+/// `[sources.url]`。`allow_hosts` が空なら無効。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct UrlSourceConfig {
+    /// `"*"`（全公開ホスト）か FQDN（完全一致または `.<host>` 接尾辞一致）。
+    #[serde(default)]
+    pub allow_hosts: Vec<String>,
+    /// リダイレクトの追従を含む 1 参照あたりの合計。
+    #[serde(default = "UrlSourceConfig::default_timeout_secs")]
+    pub timeout_secs: u64,
+    #[serde(default = "UrlSourceConfig::default_max_bytes")]
+    pub max_bytes: u64,
+    #[serde(default = "UrlSourceConfig::default_max_redirects")]
+    pub max_redirects: u32,
+}
+
+/// `[sources.narumi]`。節ごと省略可（省略 = 無効）。起動コマンドはここでのみ指定できる。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct NarumiSourceConfig {
+    /// 絶対パス必須。
+    pub command: PathBuf,
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// initialize と get_minutes の上限（起動からの締切）。子プロセスの終了処理は別に最長 3 秒かかり、
+    /// 呼び出し元は timeout + 5 秒まで待つ。
+    #[serde(default = "NarumiSourceConfig::default_timeout_secs")]
+    pub timeout_secs: u64,
+    /// `get_minutes` 応答の markdown のバイト上限。超過は TooLarge（本文は返さない）。
+    #[serde(default = "NarumiSourceConfig::default_max_bytes")]
+    pub max_bytes: u64,
+    #[serde(default)]
+    pub stderr: NarumiStderr,
+    /// 親の環境に追加・上書きするキーだけを書く。`GAIA_` 接頭辞は不可。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum NarumiStderr {
+    #[default]
+    Discard,
+    Inherit,
+}
+
+const MIB: u64 = 1024 * 1024;
+
+impl SourcesConfig {
+    pub const MIN_MAX_CONTENT_CHARS: usize = 1_000;
+    pub const MAX_MAX_CONTENT_CHARS: usize = 500_000;
+
+    fn default_max_content_chars() -> usize {
+        30_000
+    }
+
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// 純粋な範囲・形式検査。ファイルシステムや環境変数は見ない（存在・種別は解決時に検査する）。
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        let invalid = |message: String| ConfigError::InvalidSource(message);
+        if !(Self::MIN_MAX_CONTENT_CHARS..=Self::MAX_MAX_CONTENT_CHARS)
+            .contains(&self.max_content_chars)
+        {
+            return Err(invalid(format!(
+                "[sources].max_content_chars must be within {}..={}",
+                Self::MIN_MAX_CONTENT_CHARS,
+                Self::MAX_MAX_CONTENT_CHARS
+            )));
+        }
+        self.file.validate()?;
+        self.url.validate()?;
+        if let Some(narumi) = &self.narumi {
+            narumi.validate()?;
+        }
+        Ok(())
+    }
+}
+
+impl Default for SourcesConfig {
+    fn default() -> Self {
+        Self {
+            max_content_chars: Self::default_max_content_chars(),
+            file: FileSourceConfig::default(),
+            url: UrlSourceConfig::default(),
+            narumi: None,
+        }
+    }
+}
+
+fn validate_byte_limit(value: u64, setting: &str) -> Result<(), ConfigError> {
+    if !(1..=64 * MIB).contains(&value) {
+        return Err(ConfigError::InvalidSource(format!(
+            "{setting} must be within 1..={} bytes (64 MiB)",
+            64 * MIB
+        )));
+    }
+    Ok(())
+}
+
+fn validate_timeout(value: u64, max: u64, setting: &str) -> Result<(), ConfigError> {
+    if !(1..=max).contains(&value) {
+        return Err(ConfigError::InvalidSource(format!(
+            "{setting} must be within 1..={max} seconds"
+        )));
+    }
+    Ok(())
+}
+
+fn contains_nul(value: &OsStr) -> bool {
+    value.as_encoded_bytes().contains(&0)
+}
+
+impl FileSourceConfig {
+    fn default_max_bytes() -> u64 {
+        MIB
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_byte_limit(self.max_bytes, "[sources.file].max_bytes")?;
+        let mut seen = BTreeSet::new();
+        for root in &self.roots {
+            let invalid = |why: &str| {
+                ConfigError::InvalidSource(format!(
+                    "[sources.file].roots entry {} is invalid: {why}",
+                    root.display()
+                ))
+            };
+            if root.as_os_str().is_empty() || contains_nul(root.as_os_str()) {
+                return Err(invalid("empty or contains NUL"));
+            }
+            if !root.is_absolute() {
+                return Err(invalid("must be an absolute path"));
+            }
+            if root.parent().is_none() {
+                return Err(invalid("the filesystem root cannot be a source root"));
+            }
+            if !seen.insert(root.as_path()) {
+                return Err(invalid("duplicate"));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for FileSourceConfig {
+    fn default() -> Self {
+        Self {
+            roots: Vec::new(),
+            max_bytes: Self::default_max_bytes(),
+        }
+    }
+}
+
+impl UrlSourceConfig {
+    pub const MAX_TIMEOUT_SECS: u64 = 120;
+    pub const MAX_MAX_REDIRECTS: u32 = 10;
+
+    fn default_timeout_secs() -> u64 {
+        15
+    }
+
+    fn default_max_bytes() -> u64 {
+        MIB
+    }
+
+    fn default_max_redirects() -> u32 {
+        3
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_timeout(
+            self.timeout_secs,
+            Self::MAX_TIMEOUT_SECS,
+            "[sources.url].timeout_secs",
+        )?;
+        validate_byte_limit(self.max_bytes, "[sources.url].max_bytes")?;
+        if self.max_redirects > Self::MAX_MAX_REDIRECTS {
+            return Err(ConfigError::InvalidSource(format!(
+                "[sources.url].max_redirects must be within 0..={}",
+                Self::MAX_MAX_REDIRECTS
+            )));
+        }
+        let mut seen = BTreeSet::new();
+        for host in &self.allow_hosts {
+            let invalid = |why: &str| {
+                ConfigError::InvalidSource(format!(
+                    "[sources.url].allow_hosts entry `{host}` is invalid: {why}"
+                ))
+            };
+            if host != "*" && !is_allow_host_domain(host) {
+                return Err(invalid(
+                    "must be `*` or a lowercase fully qualified domain name (no IP literal, localhost, single label, or trailing dot)",
+                ));
+            }
+            if !seen.insert(host.as_str()) {
+                return Err(invalid("duplicate"));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// `allow_hosts` の要素として妥当な FQDN か（`*` は呼び出し側で先に判定する）。
+fn is_allow_host_domain(host: &str) -> bool {
+    if host.is_empty()
+        || host.len() > 253
+        || host != host.to_ascii_lowercase()
+        || host.ends_with('.')
+        || !host.contains('.')
+        || host == "localhost"
+        || host.ends_with(".localhost")
+    {
+        return false;
+    }
+    matches!(url::Host::parse(host), Ok(url::Host::Domain(parsed)) if parsed == host)
+}
+
+impl Default for UrlSourceConfig {
+    fn default() -> Self {
+        Self {
+            allow_hosts: Vec::new(),
+            timeout_secs: Self::default_timeout_secs(),
+            max_bytes: Self::default_max_bytes(),
+            max_redirects: Self::default_max_redirects(),
+        }
+    }
+}
+
+impl NarumiSourceConfig {
+    pub const MAX_TIMEOUT_SECS: u64 = 300;
+    pub const MAX_ARGS: usize = 64;
+    pub const MAX_ARG_BYTES: usize = 4096;
+    pub const MAX_ENV: usize = 32;
+
+    fn default_timeout_secs() -> u64 {
+        30
+    }
+
+    fn default_max_bytes() -> u64 {
+        MIB
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        let invalid = |message: String| ConfigError::InvalidSource(message);
+        if self.command.as_os_str().is_empty() || contains_nul(self.command.as_os_str()) {
+            return Err(invalid(
+                "[sources.narumi].command must not be empty or contain NUL".into(),
+            ));
+        }
+        if !self.command.is_absolute() {
+            return Err(invalid(
+                "[sources.narumi].command must be an absolute path".into(),
+            ));
+        }
+        validate_timeout(
+            self.timeout_secs,
+            Self::MAX_TIMEOUT_SECS,
+            "[sources.narumi].timeout_secs",
+        )?;
+        validate_byte_limit(self.max_bytes, "[sources.narumi].max_bytes")?;
+        if self.args.len() > Self::MAX_ARGS {
+            return Err(invalid(format!(
+                "[sources.narumi].args must have at most {} entries",
+                Self::MAX_ARGS
+            )));
+        }
+        for arg in &self.args {
+            if arg.len() > Self::MAX_ARG_BYTES || arg.contains('\0') {
+                return Err(invalid(format!(
+                    "[sources.narumi].args entries must be at most {} bytes and must not contain NUL",
+                    Self::MAX_ARG_BYTES
+                )));
+            }
+        }
+        if self.env.len() > Self::MAX_ENV {
+            return Err(invalid(format!(
+                "[sources.narumi].env must have at most {} entries",
+                Self::MAX_ENV
+            )));
+        }
+        for (key, value) in &self.env {
+            let mut chars = key.chars();
+            let valid_key = matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+                && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+            if !valid_key {
+                return Err(invalid(format!(
+                    "[sources.narumi].env key `{key}` must match [A-Za-z_][A-Za-z0-9_]*"
+                )));
+            }
+            if key.starts_with("GAIA_") {
+                return Err(invalid(format!(
+                    "[sources.narumi].env key `{key}` must not use the GAIA_ prefix"
+                )));
+            }
+            if value.contains('\0') {
+                return Err(invalid(format!(
+                    "[sources.narumi].env value for `{key}` must not contain NUL"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
+    #[error("[sources] is invalid: {0}")]
+    InvalidSource(String),
     #[error(
         "HOME is not set; cannot resolve the config directory (set GAIA_CONFIG / GAIA_DB explicitly)"
     )]
@@ -110,15 +448,30 @@ pub fn db_path_with(config: &Config, lookup: Lookup<'_>) -> Result<PathBuf, Conf
     if let Some(p) = &config.db_path {
         return Ok(p.clone());
     }
-    let base = match lookup("XDG_DATA_HOME") {
-        Some(x) => PathBuf::from(x),
-        None => home_dir(lookup)?.join(".local").join("share"),
-    };
-    Ok(base.join(APP_DIR).join("gaia.db"))
+    Ok(data_dir_with(lookup)?.join(APP_DIR).join("gaia.db"))
 }
 
 pub fn db_path(config: &Config) -> Result<PathBuf, ConfigError> {
     db_path_with(config, &|k| std::env::var_os(k))
+}
+
+/// XDG のデータディレクトリ（`XDG_DATA_HOME`。未設定・空なら `~/.local/share`）。
+fn data_dir_with(lookup: Lookup<'_>) -> Result<PathBuf, ConfigError> {
+    match lookup("XDG_DATA_HOME").filter(|value| !value.is_empty()) {
+        Some(x) => Ok(PathBuf::from(x)),
+        None => Ok(home_dir(lookup)?.join(".local").join("share")),
+    }
+}
+
+/// デスクトップが平文 API キーを Keychain へ保存できないときの退避ディレクトリ
+/// （`<XDG_DATA_HOME|~/.local/share>/gaia-library/keys`）。`GAIA_DB` や `db_path` の影響を受けない。
+/// file 解決器の常時拒否領域として CLI / desktop の両方がこの値を使う（存在しなくてよい）。
+pub fn key_store_dir_with(lookup: Lookup<'_>) -> Result<PathBuf, ConfigError> {
+    Ok(data_dir_with(lookup)?.join(APP_DIR).join("keys"))
+}
+
+pub fn key_store_dir() -> Result<PathBuf, ConfigError> {
+    key_store_dir_with(&|k| std::env::var_os(k))
 }
 
 impl Config {
@@ -247,6 +600,7 @@ impl Config {
     /// 認証表とクライアント識別の曖昧さを、ロード時と全保存経路で拒否する。
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.validate_unique_clients()?;
+        self.sources.validate()?;
         if let Some(name) = &self.cli.default_client
             && self.client(name).is_none()
         {

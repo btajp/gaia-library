@@ -4,7 +4,7 @@ members = ["crates/*"]
 exclude = ["desktop/src-tauri"]
 
 [workspace.package]
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
@@ -22,7 +22,8 @@ http = "1"
 jsonschema = { version = "0.51", default-features = false }
 libc = "0.2"
 rand = "0.9"
-rmcp = { version = "3.1", features = ["server", "transport-io", "transport-streamable-http-server"] }
+rmcp = { version = "3.1", features = ["server", "client", "transport-io", "transport-child-process", "transport-streamable-http-server"] }
+process-wrap = { version = "9.0", features = ["tokio1"] }
 rusqlite = { version = "0.40", features = ["bundled", "serde_json"] }
 rusqlite_migration = "2.6"
 serde = { version = "1", features = ["derive"] }
@@ -36,7 +37,9 @@ toml = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-normalization = "0.1"
-ureq = { version = "3", default-features = false, features = ["json"] }
+# unversioned::resolver（GuardedResolver）は semver 対象外の API なので版を固定する
+ureq = { version = "=3.4.0", default-features = false, features = ["json"] }
+url = "2"
 uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
 

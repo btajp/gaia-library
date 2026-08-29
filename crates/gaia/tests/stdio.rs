@@ -123,7 +123,10 @@ fn agent_sees_filtered_tools_and_calls_search() {
         !names.contains(&"reject_proposal"),
         "agent には reject_proposal も見えない: {names:?}"
     );
-    assert!(!names.contains(&"resolve_source"), "未登録ツールは見えない");
+    assert!(
+        names.contains(&"resolve_source"),
+        "v0.2.0 で登録済み: {names:?}"
+    );
 
     let called = s.request(
         2,
@@ -196,4 +199,82 @@ fn stdio_requires_explicit_client_even_with_default_human() {
     let error: serde_json::Value = serde_json::from_slice(&out.stderr).unwrap();
     assert_eq!(error["code"], "unauthorized");
     assert!(error["message"].as_str().unwrap().contains("--client"));
+}
+
+#[test]
+fn resolve_source_over_stdio_returns_snapshot_when_no_resolver_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    setup(dir.path());
+    let run_json = |args: &[&str]| -> serde_json::Value {
+        let out = Command::new(env!("CARGO_BIN_EXE_gaia"))
+            .arg("--json")
+            .args(args)
+            .env("GAIA_CONFIG", dir.path().join("config.toml"))
+            .env("GAIA_DB", dir.path().join("gaia.db"))
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    let person = run_json(&["search", "okash1n"])["entities"][0]["id"]
+        .as_i64()
+        .unwrap();
+    let reference = run_json(&[
+        "add",
+        "ref",
+        "--target-type",
+        "person",
+        "--target-id",
+        &person.to_string(),
+        "--system",
+        "minutes",
+        "--uri",
+        "minutes://meeting/42#t=1200",
+        "--note",
+        "決定箇所",
+        "--snapshot",
+        "SCIM は Phase 2",
+    ])["result"]["id"]
+        .as_i64()
+        .unwrap();
+    let mut s = Server::start(dir.path(), "bot");
+    let resolved = s.request(
+        1,
+        "tools/call",
+        serde_json::json!({"name": "resolve_source", "arguments": {"ref_id": reference}}),
+    );
+    assert_eq!(resolved["result"]["isError"], serde_json::json!(false));
+    let content = &resolved["result"]["structuredContent"];
+    assert_eq!(content["resolved"], false);
+    assert_eq!(content["reference"]["snapshot"], "SCIM は Phase 2");
+    assert!(
+        content["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("no resolver for system `minutes`"),
+        "{content}"
+    );
+    // ref_id も uri も無い呼び出しは JSON-RPC エラー（-32602）
+    let invalid = s.request(
+        2,
+        "tools/call",
+        serde_json::json!({"name": "resolve_source", "arguments": {}}),
+    );
+    assert_eq!(invalid["error"]["code"], serde_json::json!(-32602));
+    assert_eq!(invalid["error"]["data"]["code"], "invalid_params");
+    // 不在の参照は業務エラー（isError）
+    let missing = s.request(
+        3,
+        "tools/call",
+        serde_json::json!({"name": "resolve_source", "arguments": {"ref_id": 9999}}),
+    );
+    assert_eq!(missing["result"]["isError"], serde_json::json!(true));
+    assert_eq!(
+        missing["result"]["structuredContent"]["error"]["code"],
+        "not_found"
+    );
 }

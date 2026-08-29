@@ -123,3 +123,63 @@ pub fn speakers(
     print_json(&app.call(client, "resolve_speakers", payload)?, compact);
     Ok(())
 }
+
+#[derive(Args)]
+pub struct ResolveArgs {
+    /// 登録済み参照の id
+    #[arg(long, required_unless_present = "uri")]
+    pub ref_id: Option<i64>,
+    /// 登録済み参照を uri の完全一致で検索する（実効 scope 内の最新 1 件。取得先の指定ではない）
+    #[arg(long, required_unless_present = "ref_id")]
+    pub uri: Option<String>,
+    #[arg(long)]
+    pub scope: Vec<String>,
+    /// content だけを stdout に出す（ヘッダと reason は stderr）。resolved=false は終了コード 2
+    #[arg(long)]
+    pub content: bool,
+}
+
+pub fn resolve(
+    app: &App,
+    client: &ClientIdentity,
+    args: &ResolveArgs,
+    compact: bool,
+) -> anyhow::Result<()> {
+    let mut payload = json!({});
+    if let Some(id) = args.ref_id {
+        payload["ref_id"] = json!(id);
+    }
+    if let Some(uri) = &args.uri {
+        payload["uri"] = json!(uri);
+    }
+    put_scope(&mut payload, &args.scope);
+    let out = app.call(client, "resolve_source", payload)?;
+    if !args.content {
+        print_json(&out, compact);
+        return Ok(());
+    }
+    let reference = &out["reference"];
+    eprintln!(
+        "ref #{} [{}] {}",
+        reference["id"],
+        reference["system"].as_str().unwrap_or(""),
+        reference["title"]
+            .as_str()
+            .or(reference["uri"].as_str())
+            .unwrap_or("")
+    );
+    if let Some(reason) = out["reason"].as_str() {
+        eprintln!("reason: {reason}");
+    }
+    if out["resolved"].as_bool() != Some(true) {
+        if let Some(snapshot) = reference["snapshot"].as_str() {
+            eprintln!("snapshot:\n{snapshot}");
+        }
+        std::process::exit(2);
+    }
+    use std::io::Write;
+    let mut stdout = std::io::stdout().lock();
+    stdout.write_all(out["content"].as_str().unwrap_or("").as_bytes())?;
+    stdout.flush()?;
+    Ok(())
+}

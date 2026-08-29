@@ -1,5 +1,8 @@
 //! 起動処理: 設定ロード → DB オープン → ToolService 構築 → 識別解決。
-use std::path::PathBuf;
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, bail};
 use serde_json::Value;
@@ -9,6 +12,7 @@ use gaia_core::{
     contracts::Catalog,
     error::ToolError,
     identity::{ClientIdentity, Role},
+    sources::ProtectedPaths,
     storage::Db,
     tools::ToolService,
 };
@@ -30,12 +34,16 @@ impl App {
             );
         }
         let config = Config::load(&config_path)?;
-        let db = Db::open(&config::db_path(&config)?)?;
+        let db_path = config::db_path(&config)?;
+        let db = Db::open(&db_path)?;
         let catalog = Catalog::embedded().context("contracts のロードに失敗")?;
+        // resolve_source の解決器。設定は呼び出しごとに再読込し、保護領域は file 解決器が常時拒否する。
+        let protected = protected_paths(&config_path, &db_path, &|k| std::env::var_os(k));
+        let sources = gaia_mcp::sources::registry(&config_path, protected);
         Ok(Self {
             config_path,
             config,
-            service: ToolService::new(db, catalog),
+            service: ToolService::new(db, catalog).with_sources(sources),
         })
     }
 
@@ -51,6 +59,23 @@ impl App {
     ) -> Result<Value, ToolError> {
         self.service.call(client, tool, args)
     }
+}
+
+/// file 解決器が常時拒否する領域: 設定・DB のディレクトリと、デスクトップが平文 API キーを退避する
+/// ディレクトリ（同じ OS ユーザーのデスクトップと同じ場所。存在しなくてよい）。
+fn protected_paths(
+    config_path: &Path,
+    db_path: &Path,
+    lookup: &dyn Fn(&str) -> Option<OsString>,
+) -> ProtectedPaths {
+    let mut protected = ProtectedPaths::new(
+        config_path.parent().unwrap_or(Path::new("/")),
+        db_path.parent().unwrap_or(Path::new("/")),
+    );
+    if let Ok(keys) = config::key_store_dir_with(lookup) {
+        protected = protected.with_extra(keys);
+    }
+    protected
 }
 
 pub fn resolve_config_path(config_override: Option<&PathBuf>) -> anyhow::Result<PathBuf> {
@@ -132,4 +157,48 @@ pub fn init(
         affiliation
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lookup(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<OsString> {
+        move |key| {
+            pairs
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| OsString::from(v))
+        }
+    }
+
+    #[test]
+    fn protected_paths_include_config_db_and_desktop_key_store() {
+        let config_path = Path::new("/cfg/gaia-library/config.toml");
+        let db_path = Path::new("/data/gaia-library/gaia.db");
+        let protected = protected_paths(config_path, db_path, &lookup(&[("HOME", "/h")]));
+        assert_eq!(protected.config_dir, Path::new("/cfg/gaia-library"));
+        assert_eq!(protected.db_dir, Path::new("/data/gaia-library"));
+        assert_eq!(
+            protected.extra,
+            vec![PathBuf::from("/h/.local/share/gaia-library/keys")]
+        );
+        // XDG_DATA_HOME を尊重し、GAIA_DB で DB を別の場所に置いても退避ディレクトリは変わらない
+        let protected = protected_paths(
+            config_path,
+            db_path,
+            &lookup(&[
+                ("XDG_DATA_HOME", "/xdg"),
+                ("GAIA_DB", "/elsewhere/g.db"),
+                ("HOME", "/h"),
+            ]),
+        );
+        assert_eq!(
+            protected.extra,
+            vec![PathBuf::from("/xdg/gaia-library/keys")]
+        );
+        // HOME 無しでは退避ディレクトリを決められないので設定・DB のディレクトリだけになる
+        let protected = protected_paths(config_path, db_path, &lookup(&[]));
+        assert!(protected.extra.is_empty());
+    }
 }

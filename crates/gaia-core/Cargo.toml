@@ -19,6 +19,8 @@ thiserror.workspace = true
 toml.workspace = true
 tracing.workspace = true
 unicode-normalization.workspace = true
+ureq = { workspace = true, features = ["rustls"] }
+url.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

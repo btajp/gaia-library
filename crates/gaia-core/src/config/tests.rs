@@ -47,6 +47,33 @@ fn db_path_prefers_env_then_config_then_xdg_data() {
     cfg.db_path = None;
     let p = db_path_with(&cfg, &env(&[("HOME", "/h")])).unwrap();
     assert_eq!(p, PathBuf::from("/h/.local/share/gaia-library/gaia.db"));
+    let p = db_path_with(&cfg, &env(&[("XDG_DATA_HOME", "/xdg"), ("HOME", "/h")])).unwrap();
+    assert_eq!(p, PathBuf::from("/xdg/gaia-library/gaia.db"));
+    // 空の XDG_DATA_HOME は未設定として扱う
+    let p = db_path_with(&cfg, &env(&[("XDG_DATA_HOME", ""), ("HOME", "/h")])).unwrap();
+    assert_eq!(p, PathBuf::from("/h/.local/share/gaia-library/gaia.db"));
+}
+
+#[test]
+fn key_store_dir_follows_xdg_data_and_ignores_db_overrides() {
+    let p = key_store_dir_with(&env(&[("XDG_DATA_HOME", "/xdg"), ("HOME", "/h")])).unwrap();
+    assert_eq!(p, PathBuf::from("/xdg/gaia-library/keys"));
+    let p = key_store_dir_with(&env(&[("HOME", "/h")])).unwrap();
+    assert_eq!(p, PathBuf::from("/h/.local/share/gaia-library/keys"));
+    let p = key_store_dir_with(&env(&[("XDG_DATA_HOME", ""), ("HOME", "/h")])).unwrap();
+    assert_eq!(p, PathBuf::from("/h/.local/share/gaia-library/keys"));
+    // GAIA_DB / GAIA_CONFIG は退避ディレクトリの位置を変えない
+    let p = key_store_dir_with(&env(&[
+        ("GAIA_DB", "/x/g.db"),
+        ("GAIA_CONFIG", "/x/c.toml"),
+        ("HOME", "/h"),
+    ]))
+    .unwrap();
+    assert_eq!(p, PathBuf::from("/h/.local/share/gaia-library/keys"));
+    assert!(matches!(
+        key_store_dir_with(&env(&[])),
+        Err(ConfigError::MissingHome)
+    ));
 }
 
 #[test]
@@ -634,4 +661,171 @@ fn a_symlinked_lock_file_is_not_followed() {
             .is_symlink()
     );
     assert_eq!(Config::load(&path).unwrap(), config);
+}
+
+#[test]
+fn sources_default_is_all_disabled_and_not_written() {
+    let cfg = Config::default();
+    assert!(cfg.sources.is_default());
+    assert_eq!(cfg.sources.max_content_chars, 30_000);
+    assert!(cfg.sources.file.roots.is_empty());
+    assert_eq!(cfg.sources.file.max_bytes, 1024 * 1024);
+    assert!(cfg.sources.url.allow_hosts.is_empty());
+    assert_eq!(cfg.sources.url.timeout_secs, 15);
+    assert_eq!(cfg.sources.url.max_redirects, 3);
+    assert!(cfg.sources.narumi.is_none());
+    let text = toml::to_string_pretty(&cfg).unwrap();
+    assert!(!text.contains("[sources"), "{text}");
+    // [sources] 無しの設定は既定値で読める
+    let loaded: Config = toml::from_str("[server]\nport = 4111\n").unwrap();
+    assert!(loaded.sources.is_default());
+}
+
+#[test]
+fn sources_round_trip_and_partial_sections() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let mut cfg = Config::default();
+    cfg.sources.file.roots = vec![PathBuf::from(
+        "/Users/me/Library/Application Support/narumi/meetings",
+    )];
+    cfg.sources.url.allow_hosts = vec!["*".into(), "example.com".into()];
+    cfg.sources.narumi = Some(NarumiSourceConfig {
+        command: PathBuf::from("/opt/homebrew/bin/uv"),
+        args: vec![
+            "--directory".into(),
+            "/path/to/narumi".into(),
+            "run".into(),
+            "narumi-server".into(),
+            "--stdio-bridge".into(),
+        ],
+        timeout_secs: 45,
+        max_bytes: 2 * 1024 * 1024,
+        stderr: NarumiStderr::Inherit,
+        env: BTreeMap::from([("NARUMI_HOME".to_string(), "/x".to_string())]),
+    });
+    cfg.save(&path).unwrap();
+    let loaded = Config::load(&path).unwrap();
+    assert_eq!(loaded, cfg);
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("[sources.narumi]"));
+    assert!(text.contains("stderr = \"inherit\""));
+    // 節を一部だけ書いた設定
+    let partial: Config = toml::from_str("[sources.file]\nroots = [\"/tmp/a\"]\n").unwrap();
+    assert_eq!(partial.sources.file.roots, vec![PathBuf::from("/tmp/a")]);
+    assert_eq!(partial.sources.max_content_chars, 30_000);
+    assert!(partial.sources.narumi.is_none());
+    let narumi_only: Config =
+        toml::from_str("[sources.narumi]\ncommand = \"/usr/bin/true\"\n").unwrap();
+    let narumi = narumi_only.sources.narumi.unwrap();
+    assert_eq!(narumi.timeout_secs, 30);
+    assert_eq!(narumi.max_bytes, 1024 * 1024);
+    assert_eq!(narumi.stderr, NarumiStderr::Discard);
+    assert!(narumi.env.is_empty());
+}
+
+#[test]
+fn sources_validation_rejects_out_of_range_and_malformed_values() {
+    let cases: &[(&str, &str)] = &[
+        ("[sources]\nmax_content_chars = 999\n", "max_content_chars"),
+        (
+            "[sources]\nmax_content_chars = 500001\n",
+            "max_content_chars",
+        ),
+        ("[sources.file]\nmax_bytes = 0\n", "max_bytes"),
+        ("[sources.file]\nmax_bytes = 67108865\n", "max_bytes"),
+        ("[sources.file]\nroots = [\"relative/dir\"]\n", "absolute"),
+        ("[sources.file]\nroots = [\"/\"]\n", "filesystem root"),
+        ("[sources.file]\nroots = [\"/a\", \"/a\"]\n", "duplicate"),
+        ("[sources.url]\ntimeout_secs = 0\n", "timeout_secs"),
+        ("[sources.url]\ntimeout_secs = 121\n", "timeout_secs"),
+        ("[sources.url]\nmax_redirects = 11\n", "max_redirects"),
+        (
+            "[sources.url]\nallow_hosts = [\"127.0.0.1\"]\n",
+            "allow_hosts",
+        ),
+        ("[sources.url]\nallow_hosts = [\"[::1]\"]\n", "allow_hosts"),
+        (
+            "[sources.url]\nallow_hosts = [\"localhost\"]\n",
+            "allow_hosts",
+        ),
+        (
+            "[sources.url]\nallow_hosts = [\"foo.localhost\"]\n",
+            "allow_hosts",
+        ),
+        (
+            "[sources.url]\nallow_hosts = [\"intranet\"]\n",
+            "allow_hosts",
+        ),
+        (
+            "[sources.url]\nallow_hosts = [\"example.com.\"]\n",
+            "allow_hosts",
+        ),
+        (
+            "[sources.url]\nallow_hosts = [\"Example.com\"]\n",
+            "allow_hosts",
+        ),
+        ("[sources.url]\nallow_hosts = [\"*\", \"*\"]\n", "duplicate"),
+        ("[sources.narumi]\ncommand = \"uv\"\n", "absolute"),
+        ("[sources.narumi]\ncommand = \"\"\n", "command"),
+        (
+            "[sources.narumi]\ncommand = \"/usr/bin/true\"\ntimeout_secs = 301\n",
+            "timeout_secs",
+        ),
+        (
+            "[sources.narumi]\ncommand = \"/usr/bin/true\"\nmax_bytes = 0\n",
+            "[sources.narumi].max_bytes",
+        ),
+        (
+            "[sources.narumi]\ncommand = \"/usr/bin/true\"\nmax_bytes = 67108865\n",
+            "[sources.narumi].max_bytes",
+        ),
+        (
+            "[sources.narumi]\ncommand = \"/usr/bin/true\"\n[sources.narumi.env]\nGAIA_DB = \"/x\"\n",
+            "GAIA_",
+        ),
+        (
+            "[sources.narumi]\ncommand = \"/usr/bin/true\"\n[sources.narumi.env]\n\"1BAD\" = \"x\"\n",
+            "env key",
+        ),
+        (
+            "[sources.narumi]\ncommand = \"/usr/bin/true\"\n[sources.narumi.env]\n\"A-B\" = \"x\"\n",
+            "env key",
+        ),
+        (
+            "[sources.narumi]\ncommand = \"/usr/bin/true\"\nstderr = \"pipe\"\n",
+            "invalid",
+        ),
+        ("[sources]\nunknown = 1\n", "unknown"),
+        ("[sources.file]\nroot = [\"/a\"]\n", "unknown"),
+    ];
+    for (text, expected) in cases {
+        let result: Result<(), ConfigError> = toml::from_str::<Config>(text)
+            .map_err(|e| ConfigError::Parse {
+                path: PathBuf::from("mem"),
+                message: e.to_string(),
+            })
+            .and_then(|cfg| cfg.validate());
+        let error = result.expect_err(text).to_string();
+        assert!(
+            error
+                .to_ascii_lowercase()
+                .contains(&expected.to_ascii_lowercase()),
+            "{text:?}: {error}"
+        );
+    }
+    // 上限ちょうどは通る
+    let ok: Config = toml::from_str(
+        "[sources]\nmax_content_chars = 500000\n[sources.file]\nmax_bytes = 67108864\nroots = [\"/a\", \"/b\"]\n[sources.url]\ntimeout_secs = 120\nmax_redirects = 10\nallow_hosts = [\"*\", \"example.com\", \"docs.example.co.jp\"]\n[sources.narumi]\ncommand = \"/usr/bin/true\"\ntimeout_secs = 300\nmax_bytes = 67108864\n",
+    )
+    .unwrap();
+    ok.validate().unwrap();
+    // 保存経路も validate を通す
+    let dir = tempfile::tempdir().unwrap();
+    let mut bad = Config::default();
+    bad.sources.max_content_chars = 1;
+    assert!(matches!(
+        bad.save(&dir.path().join("config.toml")),
+        Err(ConfigError::InvalidSource(_))
+    ));
 }

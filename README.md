@@ -64,8 +64,51 @@ gaia search "Okta"                                     # 回答の設計図を�
 gaia proposals && gaia approve <id>                    # エージェントの提案を承認
 ```
 
+参照の本文はサーバー側で取得できる: `gaia resolve --ref-id <id> --content | less`（設定が必要。下記「参照の実体取得」）。
 承認・却下も既定 scope 内だけを対象にする。別の scope を扱う場合は `gaia approve <id> --scope <所属元名>` / `gaia reject <id> --scope <所属元名>` のように明示する。
 `propose --request-id` の再送は、同じクライアント・scope・提案内容の場合だけ重複として扱い、異なる内容での再利用は `conflict` になる。
+
+## 参照の実体取得（resolve_source）
+
+`search_context` などが返す参照（refs）の本文を、`resolve_source`（MCP）/ `gaia resolve`（CLI）/ デスクトップの「内容を取得」でサーバー側に取得させられる。参照の `system` に応じた解決器が本文を返し、取得できない場合は `resolved=false` と理由、参照と要点スナップショットをそのまま返す。DB は更新しない。
+
+解決器は既定ですべて無効で、設定ファイル `config.toml` の `[sources]` で個別に有効にする（設定は呼び出しごとに読み直すので再起動は不要）。
+
+```toml
+[sources]
+max_content_chars = 30000            # content の上限（文字数）。1000〜500000
+
+[sources.file]                       # file:///... の参照。許可ディレクトリ配下の通常ファイルだけを読む
+roots = ["/Users/<me>/Library/Application Support/narumi/meetings"]
+max_bytes = 1048576
+
+[sources.url]                        # http / https の参照。許可したホストへの GET だけ
+allow_hosts = ["docs.example.com"]   # "*" は全公開ホスト（下記の注意）。"example.com" はそのホストとサブドメイン
+timeout_secs = 15                    # 1 参照あたりの合計（リダイレクトの追従を含む）
+max_bytes = 1048576
+max_redirects = 3
+
+[sources.narumi]                     # narumi://meeting/<meeting_id>[?version=<n>] の参照
+command = "/opt/homebrew/bin/uv"     # 絶対パス。`which uv` の結果
+args = ["--directory", "/path/to/narumi", "run", "narumi-server", "--stdio-bridge"]
+timeout_secs = 30                    # initialize と get_minutes の上限。子プロセスの終了処理は別に最長 3 秒（呼び出しは timeout + 5 秒まで待つ）
+max_bytes = 1048576                  # get_minutes 応答の markdown の上限（バイト）。超過は本文を返さない
+stderr = "discard"                   # "inherit" で narumi のログを gaia の stderr に流す
+[sources.narumi.env]                 # 任意。追加・上書きするキーだけ
+NARUMI_HOME = "/Users/<me>/Library/Application Support/narumi"
+```
+
+- `file`: `roots` は絶対パスのディレクトリ。symlink で外へ出る参照、ディレクトリ、バイナリ、`max_bytes` 超は読まない。設定ファイル・DB・アプリのキー退避ディレクトリは `roots` に入れても常に対象外。現行の narumi が登録する `file://` の議事録参照は、`roots` に narumi の `meetings` ディレクトリ（`NARUMI_HOME` 配下）を入れると読める。
+- `url`: 公開テキスト向け。`localhost`・プライベート・リンクローカル・メタデータ IP は DNS 解決後でも拒否し、リダイレクトも各段で検査する。`allow_hosts = ["*"]` はエージェントが任意の公開ホストへ GET できる状態（URL クエリ経由の持ち出し経路になり得る）なので、必要なホストだけを指定する。Notion / Box などはエージェント側のコネクタで開く。
+- `narumi`: `narumi.app` を起動した状態で `--stdio-bridge` を使う（常駐サーバーへの橋渡し）。`uv` の代わりに venv 内の `narumi-server` 実行ファイルを直接指定してもよい（孫プロセスと uv の暗黙取得を避けられる）。narumi の scope 名は gaia の所属元名（affiliation）と一致させる。narumi 参照の登録規約（`system = "narumi"`, `uri = "narumi://meeting/<meeting_id>?version=<n>"`, `snapshot` 必須）は設計書 `docs/superpowers/specs/2026-08-29-gaia-library-resolve-source-design.md` §10 を参照。
+- `[sources]` を書いた設定ファイルは 0.1.x では読めない。戻す場合は `[sources]` の節を削除する（既定値のままなら書き出されない）。
+
+```sh
+gaia info                                  # capabilities.resolvers に設定済みの解決器名が出る
+gaia resolve --ref-id 12                   # JSON（resolved / content / reason）
+gaia resolve --ref-id 12 --content | less  # 本文だけを stdout へ。取得できなければ終了コード 2
+gaia resolve --uri "narumi://meeting/20260827T030500Z-a1b2c3d4?version=2"
+```
 
 ## デスクトップアプリ（Apple Silicon macOS）
 
@@ -91,7 +134,7 @@ human `desktop:<ユーザー名>` と agent `claude-code` を作成し、agent �
 
 - 検索・詳細・提案・手入力は CLI と同じ `ToolService` を呼ぶ。scope は画面上部で選び、空欄なら起動した human の既定値を使う。
 - 手入力も提案を作成してから承認する。承認だけが失敗した場合は、画面に残る提案 ID を使って再試行する。
-- 参照 URI はコピーのみ。参照先を自動で開かない。現行 facts や検索結果には取得上限があり、全履歴・総件数・ページ送りには未対応。
+- 参照 URI はコピーのみ。参照先を自動で開かない。参照カードの「内容を取得」は `resolve_source` で本文を取得してテキストとして表示し（保存はしない）、取得できない場合は理由と要点スナップショットを表示する。解決器の設定（`[sources]`）はアプリ内にはなく、設定ファイルを直接編集する。現行 facts や検索結果には取得上限があり、全履歴・総件数・ページ送りには未対応。
 - HTTP は `127.0.0.1` だけで待ち受ける。キー未発行やポート競合でも画面は使える。設定画面に表示された実際の URL を接続に使う。
 - ウィンドウを閉じても常駐を続ける。終了はアプリメニューまたはトレイの「終了」。二重起動は既存ウィンドウを表示する。
 

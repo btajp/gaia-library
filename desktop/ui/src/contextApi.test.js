@@ -133,3 +133,33 @@ describe("reference copying", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 });
+
+describe("reference resolution", () => {
+  it("calls resolve_source with the reference id and its own scope only", async () => {
+    const { reference } = await import("./test/contextFixtures");
+    const output = { reference, resolved: true, content: "本文" };
+    invoke.mockResolvedValueOnce(output);
+    expect(await context.resolveReference({ ...reference, scope: " personal " })).toBe(output);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith("call_tool", { name: "resolve_source", args: { ref_id: reference.id, scope: "personal" } });
+  });
+
+  it("rejects references without an id or scope before calling the server", async () => {
+    const { reference } = await import("./test/contextFixtures");
+    await expect(context.resolveReference({ ...reference, id: 0 })).rejects.toThrow("参照 ID");
+    await expect(context.resolveReference({ ...reference, scope: " " })).rejects.toThrow("scope");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("keeps structured failures from resolve_source", async () => {
+    const { reference } = await import("./test/contextFixtures");
+    invoke.mockRejectedValueOnce({ code: "busy", message: "resolver `narumi` is busy; retry later" });
+    await expect(context.resolveReference(reference)).rejects.toBeInstanceOf(GaiaError);
+  });
+
+  it("shows a pending note that does not promise a fixed timeout", () => {
+    // 上限は [sources] の設定次第なので、UI の文言に秒数を含めない
+    expect(context.RESOLVE_PENDING_NOTE).toBe("取得中…（時間がかかることがあります）");
+    expect(context.RESOLVE_PENDING_NOTE).not.toMatch(/\d+ ?秒/);
+  });
+});

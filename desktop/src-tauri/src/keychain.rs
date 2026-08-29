@@ -7,7 +7,10 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use gaia_core::{auth::hash_key, config::APP_DIR};
+use gaia_core::{
+    auth::hash_key,
+    config::{APP_DIR, key_store_dir_with},
+};
 use rustix::{
     fs::{self, AtFlags, FileType, Mode, OFlags},
     io::Errno,
@@ -126,24 +129,20 @@ fn load_with(
     }
 }
 
-fn fallback_root(lookup: Lookup<'_>) -> Result<PathBuf, String> {
-    let base = match lookup("XDG_DATA_HOME").filter(|value| !value.is_empty()) {
-        Some(base) => PathBuf::from(base),
-        None => PathBuf::from(
-            lookup("HOME")
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| "HOME が未設定のためキー保管先を決定できません".to_string())?,
-        )
-        .join(".local/share"),
-    };
-    if !base.is_absolute()
-        || base
+/// キー退避ディレクトリ。位置の算出は gaia-core の `config::key_store_dir_with` と共有し（CLI の file 解決器も
+/// 同じ値を常時拒否する）、ここでは書き込み先として使える形かだけを検査する。
+pub(crate) fn fallback_root(lookup: Lookup<'_>) -> Result<PathBuf, String> {
+    let filtered = |name: &str| lookup(name).filter(|value| !value.is_empty());
+    let root = key_store_dir_with(&filtered)
+        .map_err(|_| "HOME が未設定のためキー保管先を決定できません".to_string())?;
+    if !root.is_absolute()
+        || root
             .components()
             .any(|component| matches!(component, Component::ParentDir))
     {
         return Err("キー保管先には親参照を含まない絶対パスを指定してください".into());
     }
-    Ok(base.join(APP_DIR).join("keys"))
+    Ok(root)
 }
 
 fn key_filename(client: &str) -> String {

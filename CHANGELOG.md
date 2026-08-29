@@ -7,6 +7,29 @@
 
 今後の変更をこの節に追記する。
 
+## [0.2.0] - 2026-08-29
+
+### Added
+
+- `resolve_source` を登録した（契約 1.1.0）。`ref_id` または `uri`（実効 scope 内、最新 1 件）で登録済みの参照を特定し、参照の `system` に応じた解決器で本文を取得して返す。`file` は設定した許可ディレクトリ配下の通常ファイル、`url` は許可したホストへの http / https、`narumi` は設定したコマンドを子プロセスとして起動して MCP の `get_minutes` を呼ぶ。到達できない場合は `resolved=false` と理由を返し、参照と要点スナップショットをそのまま返す。DB は更新しない。
+- 設定 `[sources]` を追加した。`file.roots`、`url.allow_hosts`、`narumi.command` などで解決器を有効にする。既定はすべて無効で、設定は呼び出しごとに読み直す。
+- narumi 参照の規約を定めた: `system = "narumi"`, `uri = "narumi://meeting/<meeting_id>[?version=<n>]"`。現行の narumi 参照（`file://` の議事録）は `[sources.file].roots` に narumi の `meetings` ディレクトリを入れると解決できる。
+- CLI に `gaia resolve --ref-id <id> | --uri <uri> [--content]` を追加した。デスクトップの参照カードに「内容を取得」を追加した。
+- `get_server_info.capabilities.resolvers` に設定済みの解決器名を返すようにした。
+
+### Changed
+
+- MCP サーバーとデスクトップのツール呼び出しをブロッキング用スレッドで実行し、時間のかかる参照解決が JSON-RPC の応答や他のセッション・画面を止めないようにした。
+- `[sources]` を含む設定ファイルは 0.1.x では読めない。戻す場合は該当節を削除する。既定値のままなら `[sources]` は書き出さない。
+
+### Security
+
+- `resolve_source` は入力の `uri` を取得先に使わず、承認済み参照の `uri` だけを実体化する。scope 外の参照と存在しない参照は同じ `not_found` を返す。
+- `url` 解決は http / https のみ。userinfo 付き URL、`localhost`、ループバック・プライベート・リンクローカル・メタデータ・予約アドレスを DNS 解決後のアドレスでも拒否し、リダイレクトは上限付きで各段を再検査し、タイムアウトはリダイレクトを含む 1 参照あたりの合計とする。プロキシ環境変数と圧縮伸長を使わず、Cookie や認証ヘッダーを送らない。応答はテキスト系 Content-Type とサイズ上限に限る。
+- `file` 解決は許可ディレクトリ配下の通常ファイルに限り、symlink を解決した実体で判定し、`O_NOFOLLOW` で開いたハンドルを検査する。設定ディレクトリ・DB ディレクトリ・キー退避ディレクトリは常に対象外。バイナリは返さない。
+- `narumi` の起動コマンドは設定ファイルからのみ読み、ツール引数では指定できない。子プロセスの stdout は MCP 専用、stderr は既定で破棄し、タイムアウトで停止してプロセスグループごと終了させる。narumi へは参照行の scope 1 つだけを渡す。`get_minutes` 応答の本文は `[sources.narumi].max_bytes`（既定 1 MiB）を超えると返さない。解決器ごとに同時実行数を制限する。
+- `resolve_source` の理由文言は固定文言のみで、上流のメッセージ・パス・IP・コマンドを含めない。URI と取得内容はログに残さない。
+
 ## [0.1.2] - 2026-08-29
 
 ### Changed

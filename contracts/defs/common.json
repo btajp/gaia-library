@@ -351,7 +351,7 @@
       "required": ["tools", "resolvers", "search"],
       "properties": {
         "tools": { "type": "array", "items": { "type": "string" } },
-        "resolvers": { "type": "array", "items": { "type": "string" } },
+        "resolvers": { "type": "array", "items": { "type": "string" }, "description": "設定済みで利用できる resolve_source の system 名（file / url / narumi）" },
         "search": { "$ref": "#/$defs/SearchCapabilities" }
       }
     },

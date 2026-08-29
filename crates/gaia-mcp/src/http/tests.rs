@@ -141,3 +141,162 @@ async fn shutdown_terminates_an_active_sse_session() {
         .expect("shutdown timed out with an active SSE session")
         .unwrap();
 }
+
+/// 開始を通知してから Barrier で止まる解決器。ToolService::call が spawn_blocking で呼ばれ、解決中でも他の
+/// 要求を止めないことを、壁時計ではなく順序で観測する（core の
+/// `concurrency_limit_yields_busy_and_db_stays_unlocked_during_resolution` と同じ方式）。
+struct BlockingResolver {
+    started: std::sync::mpsc::Sender<()>,
+    release: Arc<std::sync::Barrier>,
+}
+
+impl gaia_core::sources::SourceResolver for BlockingResolver {
+    fn system(&self) -> &'static str {
+        "slow"
+    }
+
+    fn availability(
+        &self,
+        _settings: &gaia_core::config::SourcesConfig,
+    ) -> gaia_core::sources::Availability {
+        gaia_core::sources::Availability::Ready
+    }
+
+    fn max_concurrency(&self) -> usize {
+        1
+    }
+
+    fn resolve(
+        &self,
+        _request: gaia_core::sources::ResolveRequest<'_>,
+    ) -> Result<gaia_core::sources::Resolved, gaia_core::sources::Unresolved> {
+        let _ = self.started.send(());
+        self.release.wait();
+        Ok(gaia_core::sources::Resolved {
+            content: "slow body".into(),
+            notes: vec![],
+        })
+    }
+}
+
+#[tokio::test]
+async fn blocking_tool_calls_do_not_stall_other_requests() {
+    let (auth, human, agent) = auth();
+    let mut registry = gaia_core::sources::SourceRegistry::empty();
+    let (started, resolver_started) = std::sync::mpsc::channel();
+    let release = Arc::new(std::sync::Barrier::new(2));
+    registry
+        .register(Arc::new(BlockingResolver {
+            started,
+            release: release.clone(),
+        }))
+        .unwrap();
+    let service = {
+        let db = gaia_core::storage::Db::open_in_memory().unwrap();
+        gaia_core::admin::add_affiliation(&db, "fixture", "cn", None).unwrap();
+        Arc::new(
+            gaia_core::tools::ToolService::new(
+                db,
+                gaia_core::contracts::Catalog::embedded().unwrap(),
+            )
+            .with_sources(registry),
+        )
+    };
+    let server = serve_http(service, auth, Some(0)).await.unwrap();
+    let addr = server.local_addr();
+    let human_session = initialize(addr, &human).await;
+    let person = call(
+        addr,
+        &human,
+        &human_session,
+        2,
+        "propose_update",
+        json!({"target_type":"person","action":"insert","patch":{"name":"対象"},"kind":"fact","request_id":"slow-person-1"}),
+    )
+    .await;
+    let proposal_id = person["result"]["structuredContent"]["proposal_id"]
+        .as_i64()
+        .unwrap();
+    let approved = call(
+        addr,
+        &human,
+        &human_session,
+        3,
+        "approve_proposal",
+        json!({"proposal_id": proposal_id}),
+    )
+    .await;
+    let person_id = approved["result"]["structuredContent"]["result"]["id"]
+        .as_i64()
+        .unwrap();
+    let reference = call(
+        addr,
+        &human,
+        &human_session,
+        4,
+        "propose_update",
+        json!({"target_type":"ref","action":"insert","kind":"fact","request_id":"slow-ref-1",
+               "patch":{"target_type":"person","target_id":person_id,"system":"slow","uri":"slow://1","note":"n"}}),
+    )
+    .await;
+    let proposal_id = reference["result"]["structuredContent"]["proposal_id"]
+        .as_i64()
+        .unwrap();
+    let approved = call(
+        addr,
+        &human,
+        &human_session,
+        5,
+        "approve_proposal",
+        json!({"proposal_id": proposal_id}),
+    )
+    .await;
+    let ref_id = approved["result"]["structuredContent"]["result"]["id"]
+        .as_i64()
+        .unwrap();
+
+    let agent_session = initialize(addr, &agent).await;
+    let slow = tokio::spawn({
+        let agent = agent.clone();
+        let agent_session = agent_session.clone();
+        async move {
+            call(
+                addr,
+                &agent,
+                &agent_session,
+                6,
+                "resolve_source",
+                json!({"ref_id": ref_id}),
+            )
+            .await
+        }
+    });
+    // 解決器が Barrier で止まるまで待つ（時間ではなく通知で順序を決める）
+    tokio::task::spawn_blocking(move || resolver_started.recv_timeout(Duration::from_secs(10)))
+        .await
+        .unwrap()
+        .expect("the blocking resolve did not start");
+    // 解決器が止まったまま別の要求が完了する。止められていれば timeout で失敗する
+    let info = tokio::time::timeout(
+        Duration::from_secs(10),
+        call(
+            addr,
+            &agent,
+            &agent_session,
+            7,
+            "get_server_info",
+            json!({}),
+        ),
+    )
+    .await
+    .expect("get_server_info waited for the blocking resolve");
+    assert_eq!(info["result"]["structuredContent"]["name"], "gaia_library");
+    // 解決器を進めてから 1 件目の応答が返る
+    tokio::task::spawn_blocking(move || release.wait())
+        .await
+        .unwrap();
+    let slow = slow.await.unwrap();
+    assert_eq!(slow["result"]["structuredContent"]["resolved"], true);
+    assert_eq!(slow["result"]["structuredContent"]["content"], "slow body");
+    server.shutdown().await.unwrap();
+}
