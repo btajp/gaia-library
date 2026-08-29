@@ -285,6 +285,7 @@ max_redirects = 3                    # 既定 3。0..=10
 command = "/opt/homebrew/bin/uv"     # 絶対パス必須
 args = ["--directory", "/path/to/narumi", "run", "narumi-server", "--stdio-bridge"]
 timeout_secs = 30                    # 既定 30。1..=300（起動＋initialize＋get_minutes＋終了の合計）
+max_bytes = 1048576                  # 既定 1 MiB。1..=64 MiB。get_minutes 応答の markdown がこれを超えると TooLarge
 stderr = "discard"                   # "discard" | "inherit"。既定 discard
 [sources.narumi.env]                 # 任意。指定したキーだけ追加・上書き
 NARUMI_HOME = "/Users/me/Library/Application Support/narumi"
@@ -322,6 +323,7 @@ pub struct NarumiSourceConfig {
     pub command: PathBuf,
     #[serde(default)] pub args: Vec<String>,
     #[serde(default = "...")] pub timeout_secs: u64,
+    #[serde(default = "...")] pub max_bytes: u64,
     #[serde(default)] pub stderr: NarumiStderr,          // enum { Discard(既定), Inherit }（rename_all = "lowercase"）
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")] pub env: BTreeMap<String, String>,
 }
@@ -493,11 +495,11 @@ drop 時: `impl Drop for NarumiResolver` が `OnceLock::take` した runtime を
 7. `map_get_minutes(result)` で `Resolved` に写す
 8. cancel 後（および initialize 失敗・タイムアウト時）に unix の `libc::killpg(pgid, SIGKILL)` を無条件に送る（`grandchild` テストで `uv run` 相当の孫が残ることを観測したため。pgid = 子の pid で、グループが空なら ESRCH を無視する。子の終了直後に同じ pid が別のプロセスグループ leader として再利用される窓は数ミリ秒で、同一 OS ユーザーの脅威モデルでは許容する）
 
-### 9.4 応答の解釈 `map_get_minutes(CallToolResult) -> Result<Resolved, Unresolved>`（純関数。JSON フィクスチャでテスト）
+### 9.4 応答の解釈 `map_get_minutes(CallToolResult, &NarumiTarget, max_bytes) -> Result<Resolved, Unresolved>`（純関数。JSON フィクスチャでテスト）
 
 - `structured_content` を優先し、無ければ `content[0]` のテキストを JSON として読む。どちらも無ければ `NarumiInvalidResponse`
 - `is_error == Some(true)`: `error.code` を `[a-z_]{1,32}` に正規化して `NarumiError { code }`（`message` / `details` は stderr の warn にのみ出す）。`code` が無ければ `NarumiInvalidResponse`
-- 成功: `markdown` が文字列であること、`meeting_id` が要求と一致することを検査（不一致は `NarumiInvalidResponse`）。`content = markdown`。`version` / `available_versions` / `generated_at` / `provider` があれば `Note::NarumiVersion`、`unresolved_speakers` が非空なら `Note::UnresolvedSpeakers { count }`。版を必ず伝えることで `version` 省略の参照でもエージェントがどの版を読んだか分かる
+- 成功: `markdown` が文字列であること、`meeting_id` が要求と一致することを検査（不一致は `NarumiInvalidResponse`）。`markdown` のバイト数が `[sources.narumi].max_bytes` を超えれば `TooLarge`（本文は返さない。切り詰めない）。`content = markdown`。`version` / `available_versions` / `generated_at` / `provider` があれば `Note::NarumiVersion`、`unresolved_speakers` が非空なら `Note::UnresolvedSpeakers { count }`。版を必ず伝えることで `version` 省略の参照でもエージェントがどの版を読んだか分かる
 
 ### 9.5 scope の受け渡し
 
@@ -606,7 +608,7 @@ roots = ["/Users/<me>/Library/Application Support/narumi/meetings"]   # NARUMI_H
 
 `sources/narumi_uri.rs`: 表テスト（正常、`version`、fragment 無視、不正 meeting_id（長さ・大文字 hex・区切り）、余分な query、userinfo、ポート、`narumi://meeting/../x`、末尾スラッシュ、`narumi://Meeting/...`）
 
-`sources/narumi.rs`: `map_get_minutes` の JSON フィクスチャ（正常 / `structured_content` 無しでテキスト JSON / isError 封筒の各 code / `markdown` 無し / `meeting_id` 不一致 / `unresolved_speakers` の件数）
+`sources/narumi.rs`: `map_get_minutes` の JSON フィクスチャ（正常 / `structured_content` 無しでテキスト JSON / isError 封筒の各 code / `markdown` 無し / `meeting_id` 不一致 / `unresolved_speakers` の件数 / `max_bytes` 超過で `TooLarge`・ちょうどは通る・バイト数で数える）
 
 `src/bin/fake_narumi.rs`: rmcp の `ServerHandler` を stdio で提供する偽 narumi。`get_info` の `server_info.name` は `narumi`（`FAKE_NARUMI_MODE=wrong_name` のときだけ別名）。`get_minutes` の挙動を `FAKE_NARUMI_MODE` で切替: `ok`（受け取った `meeting_id` / `version` / `scope` を markdown に JSON で埋め込んで返す）/ `not_found` / `scope_denied` / `hang`（initialize 後に応答しない）/ `exit`（stderr に 1 行書いて即終了。bridge が常駐サーバーを見つけられない状況）/ `junk_stdout`（JSON でない行を stdout に吐く）/ `huge`（`max_content_chars` 超の markdown）/ `stderr_noise`（stderr に書く）/ `grandchild`（`sleep 300` を spawn してから応答を止める）
 
@@ -617,7 +619,7 @@ roots = ["/Users/<me>/Library/Application Support/narumi/meetings"]   # NARUMI_H
 - `exit` → `NarumiHandshakeFailed`。存在しないコマンド → `NarumiStartFailed`
 - `wrong_name` → `NarumiNotNarumi`
 - `junk_stdout` → rmcp 3.1.4 は JSON でない行を読み飛ばすため成功する。テストは `Ok` か固定文言（`NarumiHandshakeFailed` / `NarumiInvalidResponse` / `TimedOut`）のいずれかであることだけを断定し、rmcp 更新で挙動が変わっても panic しないことを確認する
-- `huge` → 切り詰めと `ContentTruncated`
+- `huge` → 切り詰めと `ContentTruncated`。`max_bytes` を markdown のバイト数未満にすると `TooLarge`
 - `stderr_noise` → `discard` / `inherit` の両方で結果が変わらない（親の stderr の捕捉はテストハーネスからできないため、出力の有無は断定しない）
 - `grandchild` → cancel 後に孫が残らない（残るなら §9.3 の killpg 補助を入れてから通す）
 - URI 規約違反で子が起動しない（`exit` モードでも reason は `InvalidUri`）
@@ -734,6 +736,7 @@ CHANGELOG 記載案:
 - `url` 解決器はホスト allow と IP 範囲で守るが、`allow_hosts = ["*"]` にするとエージェントが URL クエリに情報を載せて公開ホストへ送る持ち出し経路になり得る。README で狭い指定を推奨する（残リスク）
 - macOS Keychain 上の企業 CA は使わない（rustls ＋ webpki-roots）。社内 CA の HTTPS は解決できない
 - MCP のリクエスト取り消しはブロッキング処理を止めない。各解決器の timeout が上限
+- narumi 解決器の `[sources.narumi].max_bytes` は受信済みの `get_minutes` 応答に対する検査で、rmcp の子プロセス transport には受信バイト数の上限を設定できない。巨大な応答は timeout まではメモリに載る（子プロセスは同一 OS ユーザーが設定したコマンドなので、脅威モデル上は許容する残リスク）
 - `[sources]` を含む設定は 0.1.x で読めない（既定値のままなら書き出さないので、`[sources]` を触っていなければ影響しない）
 - narumi 解決器の「gaia の stdout に混ざらない」ことは stdio serve では実機で確認する（自動テストは CLI の JSON 出力と偽 narumi の統合テストに分かれており、stdio serve ＋ narumi 解決の組み合わせは未検証）
 - `killpg` は pgid の再利用窓（子の終了直後、グループが空になってから別プロセスが同じ pid で leader になるまで）で無関係なプロセスに届く可能性が理論上ある。同一 OS ユーザーの脅威モデルでは許容する

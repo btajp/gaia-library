@@ -207,7 +207,7 @@ async fn fetch_minutes(
         arguments.insert("scope".into(), json!(scope));
         let params = CallToolRequestParams::new("get_minutes").with_arguments(arguments);
         match tokio::time::timeout_at(deadline, running.peer().call_tool(params)).await {
-            Ok(Ok(result)) => map_get_minutes(result, &target),
+            Ok(Ok(result)) => map_get_minutes(result, &target, cfg.max_bytes),
             Ok(Err(error)) => {
                 tracing::warn!(error = %error, "narumi resolver: get_minutes call failed");
                 Err(Unresolved::Unavailable(Reason::NarumiInvalidResponse))
@@ -244,9 +244,12 @@ fn normalize_code(code: &str) -> Option<String> {
 }
 
 /// `get_minutes` の応答を `Resolved` に写す（純関数。JSON フィクスチャでテスト）。
+/// `max_bytes` は markdown のバイト上限（`[sources.narumi].max_bytes`）。応答全体は rmcp が既に受信しているため、
+/// ここでの検査は「超過分をツール応答へ流さない」ための上限で、受信量そのものは抑えない。
 pub fn map_get_minutes(
     result: CallToolResult,
     target: &NarumiTarget,
+    max_bytes: u64,
 ) -> Result<Resolved, Unresolved> {
     let invalid = || Unresolved::Unavailable(Reason::NarumiInvalidResponse);
     let value: Value = match result.structured_content {
@@ -277,6 +280,9 @@ pub fn map_get_minutes(
     let markdown = value["markdown"].as_str().ok_or_else(invalid)?;
     if value["meeting_id"].as_str() != Some(target.meeting_id.as_str()) {
         return Err(invalid());
+    }
+    if markdown.len() as u64 > max_bytes {
+        return Err(Unresolved::Unavailable(Reason::TooLarge));
     }
     let mut notes = Vec::new();
     if let Some(version) = value["version"]
@@ -324,6 +330,7 @@ mod tests {
     use rmcp::model::ContentBlock;
 
     const ID: &str = "20260827T030500Z-a1b2c3d4";
+    const MAX_BYTES: u64 = 1024 * 1024;
 
     fn target() -> NarumiTarget {
         NarumiTarget {
@@ -342,8 +349,12 @@ mod tests {
 
     #[test]
     fn maps_structured_success_with_version_note() {
-        let resolved =
-            map_get_minutes(CallToolResult::structured(ok_payload()), &target()).unwrap();
+        let resolved = map_get_minutes(
+            CallToolResult::structured(ok_payload()),
+            &target(),
+            MAX_BYTES,
+        )
+        .unwrap();
         assert_eq!(resolved.content, "# 議事録\n- 決定");
         assert_eq!(
             resolved.notes,
@@ -362,7 +373,7 @@ mod tests {
         payload["unresolved_speakers"] = json!(["Speaker 1", "Speaker 2"]);
         payload["generated_at"] = json!("2026-08-27T03:05:00Z\n<script>");
         let result = CallToolResult::success(vec![ContentBlock::text(payload.to_string())]);
-        let resolved = map_get_minutes(result, &target()).unwrap();
+        let resolved = map_get_minutes(result, &target(), MAX_BYTES).unwrap();
         assert_eq!(resolved.notes.len(), 2);
         assert_eq!(resolved.notes[1], Note::UnresolvedSpeakers { count: 2 });
         match &resolved.notes[0] {
@@ -380,13 +391,13 @@ mod tests {
                 json!({"error": {"code": code, "message": "secret detail"}}),
             );
             assert_eq!(
-                map_get_minutes(result, &target()).unwrap_err(),
+                map_get_minutes(result, &target(), MAX_BYTES).unwrap_err(),
                 Unresolved::Unavailable(Reason::NarumiError { code: code.into() })
             );
         }
         let weird = CallToolResult::structured_error(json!({"error": {"code": "Not-Found 1"}}));
         assert_eq!(
-            map_get_minutes(weird, &target()).unwrap_err(),
+            map_get_minutes(weird, &target(), MAX_BYTES).unwrap_err(),
             Unresolved::Unavailable(Reason::NarumiError {
                 code: "notfound".into()
             })
@@ -395,7 +406,8 @@ mod tests {
         assert_eq!(
             map_get_minutes(
                 CallToolResult::structured_error(json!({"error": {}})),
-                &target()
+                &target(),
+                MAX_BYTES
             )
             .unwrap_err(),
             invalid
@@ -403,27 +415,54 @@ mod tests {
         let mut missing = ok_payload();
         missing.as_object_mut().unwrap().remove("markdown");
         assert_eq!(
-            map_get_minutes(CallToolResult::structured(missing), &target()).unwrap_err(),
+            map_get_minutes(CallToolResult::structured(missing), &target(), MAX_BYTES).unwrap_err(),
             invalid
         );
         let mut mismatch = ok_payload();
         mismatch["meeting_id"] = json!("20260827T030500Z-ffffffff");
         assert_eq!(
-            map_get_minutes(CallToolResult::structured(mismatch), &target()).unwrap_err(),
+            map_get_minutes(CallToolResult::structured(mismatch), &target(), MAX_BYTES)
+                .unwrap_err(),
             invalid
         );
         assert_eq!(
-            map_get_minutes(CallToolResult::success(vec![]), &target()).unwrap_err(),
+            map_get_minutes(CallToolResult::success(vec![]), &target(), MAX_BYTES).unwrap_err(),
             invalid
         );
         assert_eq!(
             map_get_minutes(
                 CallToolResult::success(vec![ContentBlock::text("not json")]),
-                &target()
+                &target(),
+                MAX_BYTES
             )
             .unwrap_err(),
             invalid
         );
+    }
+
+    #[test]
+    fn markdown_over_max_bytes_is_too_large_and_exact_size_is_accepted() {
+        let markdown = "字".repeat(100);
+        let bytes = markdown.len() as u64;
+        assert_eq!(bytes, 300);
+        let mut payload = ok_payload();
+        payload["markdown"] = json!(markdown);
+        assert_eq!(
+            map_get_minutes(
+                CallToolResult::structured(payload.clone()),
+                &target(),
+                bytes - 1
+            )
+            .unwrap_err(),
+            Unresolved::Unavailable(Reason::TooLarge)
+        );
+        let resolved =
+            map_get_minutes(CallToolResult::structured(payload), &target(), bytes).unwrap();
+        assert_eq!(resolved.content.len() as u64, bytes);
+        // 上限はバイト数で数える（文字数ではない）
+        let mut ascii = ok_payload();
+        ascii["markdown"] = json!("a".repeat(100));
+        assert!(map_get_minutes(CallToolResult::structured(ascii), &target(), 100).is_ok());
     }
 
     #[test]
@@ -440,6 +479,7 @@ mod tests {
             command: "/usr/bin/true".into(),
             args: vec![],
             timeout_secs: 1,
+            max_bytes: MAX_BYTES,
             stderr: NarumiStderr::Discard,
             env: Default::default(),
         });

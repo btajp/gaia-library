@@ -35,6 +35,7 @@ fn settings(mode: &str, timeout_secs: u64, pid_file: Option<&std::path::Path>) -
             command: fake_narumi(),
             args: vec![],
             timeout_secs,
+            max_bytes: 1024 * 1024,
             stderr: NarumiStderr::Discard,
             env,
         }),
@@ -200,6 +201,18 @@ fn text_only_and_unresolved_and_huge_responses() {
     )
     .unwrap();
     assert_eq!(resolved.content.chars().count(), 40_000);
+    // markdown が [sources.narumi].max_bytes（バイト数）を超えると本文を返さず TooLarge
+    let mut limited = settings("huge", 10, None);
+    limited.narumi.as_mut().unwrap().max_bytes = 40_000 * 3 - 1;
+    assert_eq!(
+        reason(resolve(
+            &resolver,
+            &limited,
+            &format!("narumi://meeting/{ID}"),
+            "cn",
+        )),
+        Reason::TooLarge
+    );
 }
 
 #[test]

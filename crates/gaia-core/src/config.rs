@@ -102,6 +102,9 @@ pub struct NarumiSourceConfig {
     /// 起動＋initialize＋get_minutes＋終了の合計。
     #[serde(default = "NarumiSourceConfig::default_timeout_secs")]
     pub timeout_secs: u64,
+    /// `get_minutes` 応答の markdown のバイト上限。超過は TooLarge（本文は返さない）。
+    #[serde(default = "NarumiSourceConfig::default_max_bytes")]
+    pub max_bytes: u64,
     #[serde(default)]
     pub stderr: NarumiStderr,
     /// 親の環境に追加・上書きするキーだけを書く。`GAIA_` 接頭辞は不可。
@@ -312,6 +315,10 @@ impl NarumiSourceConfig {
         30
     }
 
+    fn default_max_bytes() -> u64 {
+        MIB
+    }
+
     fn validate(&self) -> Result<(), ConfigError> {
         let invalid = |message: String| ConfigError::InvalidSource(message);
         if self.command.as_os_str().is_empty() || contains_nul(self.command.as_os_str()) {
@@ -329,6 +336,7 @@ impl NarumiSourceConfig {
             Self::MAX_TIMEOUT_SECS,
             "[sources.narumi].timeout_secs",
         )?;
+        validate_byte_limit(self.max_bytes, "[sources.narumi].max_bytes")?;
         if self.args.len() > Self::MAX_ARGS {
             return Err(invalid(format!(
                 "[sources.narumi].args must have at most {} entries",

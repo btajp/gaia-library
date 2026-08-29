@@ -92,6 +92,7 @@ max_redirects = 3
 command = "/opt/homebrew/bin/uv"     # 絶対パス。`which uv` の結果
 args = ["--directory", "/path/to/narumi", "run", "narumi-server", "--stdio-bridge"]
 timeout_secs = 30
+max_bytes = 1048576                  # get_minutes 応答の markdown の上限（バイト）。超過は本文を返さない
 stderr = "discard"                   # "inherit" で narumi のログを gaia の stderr に流す
 [sources.narumi.env]                 # 任意。追加・上書きするキーだけ
 NARUMI_HOME = "/Users/<me>/Library/Application Support/narumi"

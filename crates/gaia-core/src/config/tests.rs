@@ -673,6 +673,7 @@ fn sources_round_trip_and_partial_sections() {
             "--stdio-bridge".into(),
         ],
         timeout_secs: 45,
+        max_bytes: 2 * 1024 * 1024,
         stderr: NarumiStderr::Inherit,
         env: BTreeMap::from([("NARUMI_HOME".to_string(), "/x".to_string())]),
     });
@@ -691,6 +692,7 @@ fn sources_round_trip_and_partial_sections() {
         toml::from_str("[sources.narumi]\ncommand = \"/usr/bin/true\"\n").unwrap();
     let narumi = narumi_only.sources.narumi.unwrap();
     assert_eq!(narumi.timeout_secs, 30);
+    assert_eq!(narumi.max_bytes, 1024 * 1024);
     assert_eq!(narumi.stderr, NarumiStderr::Discard);
     assert!(narumi.env.is_empty());
 }
@@ -744,6 +746,14 @@ fn sources_validation_rejects_out_of_range_and_malformed_values() {
             "timeout_secs",
         ),
         (
+            "[sources.narumi]\ncommand = \"/usr/bin/true\"\nmax_bytes = 0\n",
+            "[sources.narumi].max_bytes",
+        ),
+        (
+            "[sources.narumi]\ncommand = \"/usr/bin/true\"\nmax_bytes = 67108865\n",
+            "[sources.narumi].max_bytes",
+        ),
+        (
             "[sources.narumi]\ncommand = \"/usr/bin/true\"\n[sources.narumi.env]\nGAIA_DB = \"/x\"\n",
             "GAIA_",
         ),
@@ -779,7 +789,7 @@ fn sources_validation_rejects_out_of_range_and_malformed_values() {
     }
     // 上限ちょうどは通る
     let ok: Config = toml::from_str(
-        "[sources]\nmax_content_chars = 500000\n[sources.file]\nmax_bytes = 67108864\nroots = [\"/a\", \"/b\"]\n[sources.url]\ntimeout_secs = 120\nmax_redirects = 10\nallow_hosts = [\"*\", \"example.com\", \"docs.example.co.jp\"]\n[sources.narumi]\ncommand = \"/usr/bin/true\"\ntimeout_secs = 300\n",
+        "[sources]\nmax_content_chars = 500000\n[sources.file]\nmax_bytes = 67108864\nroots = [\"/a\", \"/b\"]\n[sources.url]\ntimeout_secs = 120\nmax_redirects = 10\nallow_hosts = [\"*\", \"example.com\", \"docs.example.co.jp\"]\n[sources.narumi]\ncommand = \"/usr/bin/true\"\ntimeout_secs = 300\nmax_bytes = 67108864\n",
     )
     .unwrap();
     ok.validate().unwrap();
