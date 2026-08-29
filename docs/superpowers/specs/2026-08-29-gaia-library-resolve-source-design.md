@@ -59,7 +59,7 @@ gaia-library（main 1f5560a）:
 - 既存テストの `resolve_source` 断定: `crates/gaia-core/src/tools/mod.rs`（`call_enforces_existence_role_and_input_schema` の「disabled = 存在しない扱い」と `contract_version == "1.0.0"`）、`crates/gaia-mcp/src/server.rs:264`（`get_tool("resolve_source").is_none()`）、`crates/gaia-mcp/src/http/tests/stateless.rs:48`（未知ツール列に `resolve_source` を含めて 400 / not_found を期待）、`crates/gaia/tests/stdio.rs:126`、`crates/gaia/tests/http.rs:265`
 - `scripts/lib/release-metadata.mjs` は workspace `Cargo.toml`・`desktop/src-tauri/Cargo.toml`・`tauri.conf.json` の版一致と CHANGELOG の対象節を検査する
 
-narumi（`/Users/okash1n/ghq/github.com/btajp/narumi`、読み取りのみ）:
+narumi（narumi のローカルチェックアウト。読み取り専用で参照した）:
 
 - 現行の gaia エクスポータ `pipeline/src/narumi/export/gaia.py` は provenance を `system = "file"`, `uri = <minutes/v<N>/minutes.md の Path.resolve().as_uri()>`, `title = "<meeting_name> 議事録 v<N>"`, `note = "narumi meeting <id>; minutes version <N>; ..."` で送り、`snapshot` を入れていない。`narumi://` 規約は narumi 側にまだ存在しない
 - 議事録の実体は `<NARUMI_HOME>/meetings/<meeting_id>/minutes/v<N>/minutes.md`。`NARUMI_HOME` の既定は `~/Library/Application Support/narumi`（`as_uri()` は空白を `%20` に符号化する）

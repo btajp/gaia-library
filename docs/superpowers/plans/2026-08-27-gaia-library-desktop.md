@@ -967,7 +967,7 @@ git commit -m "feat(desktop): settings screen with key issuance, snippets and CL
 - Modify: `desktop/src-tauri/Cargo.toml`（`tauri-plugin-updater = "2"` 追加・`default-run = "gaia-desktop"` 追加）, `desktop/src-tauri/tauri.conf.json`（plugins.updater）, `desktop/src-tauri/src/lib.rs`（メニュー＋起動時チェック）, `desktop/src-tauri/src/commands.rs`（`check_updates`）, `desktop/ui/src/screens/Settings.tsx`（「アップデートを確認」ボタン）
 
 **Interfaces:**
-- 移植元（同一マシン上の実証済み実装）: `/Users/okash1n/ghq/github.com/btajp/solo-eikaiwa/desktop/src-tauri/src/updater.rs`・`updater_signature.rs`・`src/bin/verify-updater-signature.rs`・`src/lib.rs`（メニュー配線部）
+- 移植元（実証済み実装。`btajp/solo-eikaiwa` のローカルチェックアウト）: 同リポジトリの `desktop/src-tauri/src/updater.rs`・`updater_signature.rs`・`src/bin/verify-updater-signature.rs`・`src/lib.rs`（メニュー配線部）
 - E2E 自動承認の環境変数は `GAIA_UPDATER_AUTO=1`
 - endpoint: `https://github.com/btajp/gaia-library/releases/latest/download/latest.json`
 
@@ -1053,7 +1053,7 @@ git commit -m "feat(desktop): port auto-updater with minisign verification" -m "
 - Create: `CHANGELOG.md`, `scripts/check-updater-key-policy.sh`, `scripts/release-desktop.sh`, `desktop/e2e-updater/README.md`, `desktop/e2e-updater/old.conf.json`, `desktop/e2e-updater/new.conf.json`
 
 **Interfaces:**
-- 移植元: `/Users/okash1n/ghq/github.com/btajp/solo-eikaiwa/scripts/{release-desktop.sh,check-updater-key-policy.sh}`・`desktop/e2e-updater/`
+- 移植元: `btajp/solo-eikaiwa` のローカルチェックアウトにある `scripts/{release-desktop.sh,check-updater-key-policy.sh}`・`desktop/e2e-updater/`
 - gaia 向けの差分（これ以外は移植元の構造・チェックを維持する）:
   - 公開鍵の読み出し元: `desktop/src-tauri/tauri.conf.json` の `plugins.updater.pubkey`
   - バージョン整合: root `Cargo.toml` の `workspace.package.version`・`desktop/src-tauri/Cargo.toml`・`desktop/src-tauri/tauri.conf.json`・`CHANGELOG.md` の `## [X.Y.Z]` 節・タグ未使用の 5 点一致
