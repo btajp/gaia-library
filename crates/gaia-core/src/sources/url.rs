@@ -8,7 +8,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use ureq::{
@@ -210,12 +210,27 @@ fn fetch(uri: &str, settings: &UrlSourceConfig, policy: AddressPolicy) -> Result
     })?;
     let rejected = Arc::new(AtomicBool::new(false));
     let agent = agent(settings, policy, rejected.clone());
+    // timeout_secs はリダイレクトを含む 1 解決あたりの合計。ureq の timeout_global は call 単位なので、
+    // 各ホップに残り時間を渡す。
+    let deadline = Instant::now() + Duration::from_secs(settings.timeout_secs);
+    let timed_out = || Reason::TimedOut {
+        secs: settings.timeout_secs,
+    };
     let mut hops = 0u32;
     loop {
         check_url(&current, settings, policy)?;
         current.set_fragment(None);
         rejected.store(false, Ordering::SeqCst);
-        let mut response = match agent.get(current.as_str()).call() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(timed_out());
+        }
+        let request = agent
+            .get(current.as_str())
+            .config()
+            .timeout_global(Some(remaining))
+            .build();
+        let mut response = match request.call() {
             Ok(response) => response,
             Err(error) => return Err(map_transport_error(error, settings, &rejected)),
         };
@@ -267,9 +282,7 @@ fn fetch(uri: &str, settings: &UrlSourceConfig, policy: AddressPolicy) -> Result
         if let Err(error) = read {
             tracing::warn!(kind = ?error.kind(), "url resolver: reading body failed");
             return Err(if error.kind() == std::io::ErrorKind::TimedOut {
-                Reason::TimedOut {
-                    secs: settings.timeout_secs,
-                }
+                timed_out()
             } else {
                 Reason::ReadFailed
             });
@@ -664,6 +677,18 @@ mod tests {
                 thread::sleep(Duration::from_millis(2500));
                 http("200 OK", "Content-Type: text/plain\r\n", b"late")
             }
+            "/slow-redirect" => {
+                thread::sleep(Duration::from_millis(600));
+                http(
+                    "302 Found",
+                    &format!("Location: http://127.0.0.1:{}/slow-target\r\n", addr.port()),
+                    b"",
+                )
+            }
+            "/slow-target" => {
+                thread::sleep(Duration::from_millis(600));
+                http("200 OK", "Content-Type: text/plain\r\n", b"late")
+            }
             _ => http("500 Internal Server Error", "", b""),
         });
         let s = loopback_settings();
@@ -720,6 +745,17 @@ mod tests {
         assert_eq!(
             resolve_with(&server, "/slow", &s).unwrap_err(),
             Reason::TimedOut { secs: 1 }
+        );
+        // timeout_secs はリダイレクトを含む合計: 各ホップは 1 秒未満でも合計 1.2 秒で TimedOut
+        let started = Instant::now();
+        assert_eq!(
+            resolve_with(&server, "/slow-redirect", &s).unwrap_err(),
+            Reason::TimedOut { secs: 1 }
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(1500),
+            "{:?}",
+            started.elapsed()
         );
         // 送ったヘッダの検査: Accept-Encoding / Cookie / Authorization は無く、Cookie は次ホップに送らない
         let requests = server.requests.lock().unwrap();

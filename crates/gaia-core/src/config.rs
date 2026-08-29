@@ -82,6 +82,7 @@ pub struct UrlSourceConfig {
     /// `"*"`（全公開ホスト）か FQDN（完全一致または `.<host>` 接尾辞一致）。
     #[serde(default)]
     pub allow_hosts: Vec<String>,
+    /// リダイレクトの追従を含む 1 参照あたりの合計。
     #[serde(default = "UrlSourceConfig::default_timeout_secs")]
     pub timeout_secs: u64,
     #[serde(default = "UrlSourceConfig::default_max_bytes")]

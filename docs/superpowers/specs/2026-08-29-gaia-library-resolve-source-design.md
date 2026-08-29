@@ -277,7 +277,7 @@ max_bytes = 1048576                  # 既定 1 MiB。1..=64 MiB。超えるフ�
 
 [sources.url]
 allow_hosts = []                     # 既定: 空 = 無効。"*" で全公開ホスト、"example.com" はそのホストとサブドメイン
-timeout_secs = 15                    # 既定 15。1..=120（接続 5 秒はその内数）
+timeout_secs = 15                    # 既定 15。1..=120。リダイレクトの追従を含む 1 参照あたりの合計（接続 5 秒はその内数）
 max_bytes = 1048576                  # 既定 1 MiB。1..=64 MiB
 max_redirects = 3                    # 既定 3。0..=10
 
@@ -419,7 +419,7 @@ ureq の `unversioned::resolver::Resolver` を実装し、`Agent::with_parts(con
 
 ### 7.4 送受信
 
-- ureq `Config`: `proxy(None)`（環境変数 `HTTP_PROXY` 等を無視。プロキシ経由で判定を迂回させない）、`max_redirects(0)`（自前で追う）、`timeout_connect(5s)`、`timeout_resolve(5s)`、`timeout_global(timeout_secs)`、`http_status_as_error(false)`、`user_agent("gaia-library/<version>")`。TLS は rustls ＋ webpki-roots（検証無効化 API は使わない）
+- ureq `Config`: `proxy(None)`（環境変数 `HTTP_PROXY` 等を無視。プロキシ経由で判定を迂回させない）、`max_redirects(0)`（自前で追う）、`timeout_connect(5s)`、`timeout_resolve(5s)`、`timeout_global`（`timeout_secs` はリダイレクトの追従を含む 1 参照あたりの合計。ureq の `timeout_global` は call 単位なので、各ホップの request config に締切までの残り時間を渡し、残りが無ければ call せずに `TimedOut`）、`http_status_as_error(false)`、`user_agent("gaia-library/<version>")`。TLS は rustls ＋ webpki-roots（検証無効化 API は使わない）
 - メソッドは GET のみ。ヘッダは `Accept: text/markdown, text/plain, application/json, text/html;q=0.8, */*;q=0.1`。Cookie / Authorization は送らない。`Accept-Encoding` は送らない
 - リダイレクト: `301/302/303/307/308` のみ追従。`Location` を現在 URL 基準で解決し §7.1 を再実行、`max_redirects` 超で `UrlNotAllowed { Redirects }`。`allow_hosts` はリダイレクト先にも適用
 - 応答: ステータス 200 以外 → `UpstreamStatus { status }`（本文は読まない）。`Content-Type` の media type が `text/*`, `application/json`, `application/*+json`, `application/xml`, `application/*+xml`, `application/xhtml+xml` 以外（または無し）→ `UnsupportedContentType`（本文は読まない）。`charset` が指定され `utf-8` / `utf8` 以外 → `UnsupportedContentType`（変換は入れない）
@@ -575,7 +575,7 @@ roots = ["/Users/<me>/Library/Application Support/narumi/meetings"]   # NARUMI_H
 `sources/url.rs`
 - `check_url` 表テスト: `https://example.com/a.md` 許可、`ftp://` / `file://` / `javascript:` 拒否、`http://user:pw@example.com/` 拒否、`http://localhost/` / `http://foo.localhost/` / `http://intranet/` / `http://example.com./` 拒否、`http://127.0.0.1/` / `http://127.1/` / `http://2130706433/` / `http://0x7f.1/` / `http://0177.0.0.1/` / `http://[::1]/` / `http://[::ffff:127.0.0.1]/` / `http://169.254.169.254/latest/meta-data` 拒否（`url` の正規化後に IP として判定される）、`allow_hosts` 不一致で拒否
 - `GuardedResolver` に偽の内側 Resolver を注入: 全件公開なら通る、1 件でも非公開なら `rejected` が立って失敗
-- 実 HTTP 経路（`std::net::TcpListener` の固定応答サーバーを 127.0.0.1 で立て、`AddressPolicy::AllowLoopback` で疎通）: 200 `text/plain`、404 → `UpstreamStatus { 404 }`、`Content-Type: image/png` → `UnsupportedContentType`、`charset=shift_jis` → `UnsupportedContentType`、`Content-Length` 超過 → 読まずに `TooLarge`、長さ不明の超過 → 切り詰めと `BodyTruncated`、`text/html` → verbatim ＋ `HtmlAsIs`、`302 Location: http://169.254.169.254/` → `UrlNotAllowed { Address }`（本番ポリシーで別テスト）、リダイレクト 4 回 → `UrlNotAllowed { Redirects }`、応答遅延（`timeout_secs = 1`）→ `TimedOut`、`Set-Cookie` を次ホップに送らない、リクエストに `Accept-Encoding` が無い
+- 実 HTTP 経路（`std::net::TcpListener` の固定応答サーバーを 127.0.0.1 で立て、`AddressPolicy::AllowLoopback` で疎通）: 200 `text/plain`、404 → `UpstreamStatus { 404 }`、`Content-Type: image/png` → `UnsupportedContentType`、`charset=shift_jis` → `UnsupportedContentType`、`Content-Length` 超過 → 読まずに `TooLarge`、長さ不明の超過 → 切り詰めと `BodyTruncated`、`text/html` → verbatim ＋ `HtmlAsIs`、`302 Location: http://169.254.169.254/` → `UrlNotAllowed { Address }`（本番ポリシーで別テスト）、リダイレクト 4 回 → `UrlNotAllowed { Redirects }`、応答遅延（`timeout_secs = 1`）→ `TimedOut`、各ホップは 1 秒未満だが合計で超えるリダイレクト（`timeout_secs = 1`）→ `TimedOut`（1.5 秒以内に返る）、`Set-Cookie` を次ホップに送らない、リクエストに `Accept-Encoding` が無い
 - 本番ポリシーで `http://127.0.0.1:<port>/` が接続前に拒否される（サーバー側の accept が呼ばれない）
 
 `sources/file.rs`（tempdir を root に）

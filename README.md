@@ -84,7 +84,7 @@ max_bytes = 1048576
 
 [sources.url]                        # http / https の参照。許可したホストへの GET だけ
 allow_hosts = ["docs.example.com"]   # "*" は全公開ホスト（下記の注意）。"example.com" はそのホストとサブドメイン
-timeout_secs = 15
+timeout_secs = 15                    # 1 参照あたりの合計（リダイレクトの追従を含む）
 max_bytes = 1048576
 max_redirects = 3
 
