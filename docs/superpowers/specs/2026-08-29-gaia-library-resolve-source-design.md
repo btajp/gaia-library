@@ -284,7 +284,7 @@ max_redirects = 3                    # 既定 3。0..=10
 [sources.narumi]                     # 節ごと省略可。省略 = 無効
 command = "/opt/homebrew/bin/uv"     # 絶対パス必須
 args = ["--directory", "/path/to/narumi", "run", "narumi-server", "--stdio-bridge"]
-timeout_secs = 30                    # 既定 30。1..=300（起動＋initialize＋get_minutes＋終了の合計）
+timeout_secs = 30                    # 既定 30。1..=300。initialize と get_minutes の上限（起動からの締切）。子プロセスの終了処理は別に最長 3 秒（呼び出し元は timeout + 5 秒まで待つ）
 max_bytes = 1048576                  # 既定 1 MiB。1..=64 MiB。get_minutes 応答の markdown がこれを超えると TooLarge
 stderr = "discard"                   # "discard" | "inherit"。既定 discard
 [sources.narumi.env]                 # 任意。指定したキーだけ追加・上書き

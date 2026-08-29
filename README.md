@@ -91,7 +91,7 @@ max_redirects = 3
 [sources.narumi]                     # narumi://meeting/<meeting_id>[?version=<n>] の参照
 command = "/opt/homebrew/bin/uv"     # 絶対パス。`which uv` の結果
 args = ["--directory", "/path/to/narumi", "run", "narumi-server", "--stdio-bridge"]
-timeout_secs = 30
+timeout_secs = 30                    # initialize と get_minutes の上限。子プロセスの終了処理は別に最長 3 秒（呼び出しは timeout + 5 秒まで待つ）
 max_bytes = 1048576                  # get_minutes 応答の markdown の上限（バイト）。超過は本文を返さない
 stderr = "discard"                   # "inherit" で narumi のログを gaia の stderr に流す
 [sources.narumi.env]                 # 任意。追加・上書きするキーだけ

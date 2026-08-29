@@ -99,7 +99,8 @@ pub struct NarumiSourceConfig {
     pub command: PathBuf,
     #[serde(default)]
     pub args: Vec<String>,
-    /// 起動＋initialize＋get_minutes＋終了の合計。
+    /// initialize と get_minutes の上限（起動からの締切）。子プロセスの終了処理は別に最長 3 秒かかり、
+    /// 呼び出し元は timeout + 5 秒まで待つ。
     #[serde(default = "NarumiSourceConfig::default_timeout_secs")]
     pub timeout_secs: u64,
     /// `get_minutes` 応答の markdown のバイト上限。超過は TooLarge（本文は返さない）。
