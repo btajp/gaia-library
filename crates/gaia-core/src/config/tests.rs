@@ -47,6 +47,33 @@ fn db_path_prefers_env_then_config_then_xdg_data() {
     cfg.db_path = None;
     let p = db_path_with(&cfg, &env(&[("HOME", "/h")])).unwrap();
     assert_eq!(p, PathBuf::from("/h/.local/share/gaia-library/gaia.db"));
+    let p = db_path_with(&cfg, &env(&[("XDG_DATA_HOME", "/xdg"), ("HOME", "/h")])).unwrap();
+    assert_eq!(p, PathBuf::from("/xdg/gaia-library/gaia.db"));
+    // 空の XDG_DATA_HOME は未設定として扱う
+    let p = db_path_with(&cfg, &env(&[("XDG_DATA_HOME", ""), ("HOME", "/h")])).unwrap();
+    assert_eq!(p, PathBuf::from("/h/.local/share/gaia-library/gaia.db"));
+}
+
+#[test]
+fn key_store_dir_follows_xdg_data_and_ignores_db_overrides() {
+    let p = key_store_dir_with(&env(&[("XDG_DATA_HOME", "/xdg"), ("HOME", "/h")])).unwrap();
+    assert_eq!(p, PathBuf::from("/xdg/gaia-library/keys"));
+    let p = key_store_dir_with(&env(&[("HOME", "/h")])).unwrap();
+    assert_eq!(p, PathBuf::from("/h/.local/share/gaia-library/keys"));
+    let p = key_store_dir_with(&env(&[("XDG_DATA_HOME", ""), ("HOME", "/h")])).unwrap();
+    assert_eq!(p, PathBuf::from("/h/.local/share/gaia-library/keys"));
+    // GAIA_DB / GAIA_CONFIG は退避ディレクトリの位置を変えない
+    let p = key_store_dir_with(&env(&[
+        ("GAIA_DB", "/x/g.db"),
+        ("GAIA_CONFIG", "/x/c.toml"),
+        ("HOME", "/h"),
+    ]))
+    .unwrap();
+    assert_eq!(p, PathBuf::from("/h/.local/share/gaia-library/keys"));
+    assert!(matches!(
+        key_store_dir_with(&env(&[])),
+        Err(ConfigError::MissingHome)
+    ));
 }
 
 #[test]

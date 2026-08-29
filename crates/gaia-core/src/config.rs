@@ -447,15 +447,30 @@ pub fn db_path_with(config: &Config, lookup: Lookup<'_>) -> Result<PathBuf, Conf
     if let Some(p) = &config.db_path {
         return Ok(p.clone());
     }
-    let base = match lookup("XDG_DATA_HOME") {
-        Some(x) => PathBuf::from(x),
-        None => home_dir(lookup)?.join(".local").join("share"),
-    };
-    Ok(base.join(APP_DIR).join("gaia.db"))
+    Ok(data_dir_with(lookup)?.join(APP_DIR).join("gaia.db"))
 }
 
 pub fn db_path(config: &Config) -> Result<PathBuf, ConfigError> {
     db_path_with(config, &|k| std::env::var_os(k))
+}
+
+/// XDG のデータディレクトリ（`XDG_DATA_HOME`。未設定・空なら `~/.local/share`）。
+fn data_dir_with(lookup: Lookup<'_>) -> Result<PathBuf, ConfigError> {
+    match lookup("XDG_DATA_HOME").filter(|value| !value.is_empty()) {
+        Some(x) => Ok(PathBuf::from(x)),
+        None => Ok(home_dir(lookup)?.join(".local").join("share")),
+    }
+}
+
+/// デスクトップが平文 API キーを Keychain へ保存できないときの退避ディレクトリ
+/// （`<XDG_DATA_HOME|~/.local/share>/gaia-library/keys`）。`GAIA_DB` や `db_path` の影響を受けない。
+/// file 解決器の常時拒否領域として CLI / desktop の両方がこの値を使う（存在しなくてよい）。
+pub fn key_store_dir_with(lookup: Lookup<'_>) -> Result<PathBuf, ConfigError> {
+    Ok(data_dir_with(lookup)?.join(APP_DIR).join("keys"))
+}
+
+pub fn key_store_dir() -> Result<PathBuf, ConfigError> {
+    key_store_dir_with(&|k| std::env::var_os(k))
 }
 
 impl Config {

@@ -229,7 +229,7 @@ pub fn registry(config_path: &Path, protected: ProtectedPaths) -> SourceRegistry
 
 ### 4.4 CLI（crates/gaia）
 
-- `App::open`: `ToolService::new(db, catalog).with_sources(gaia_mcp::sources::registry(&config_path, ProtectedPaths { config_dir, db_dir, extra: vec![] }))`。`config_dir` は `config_path.parent()`、`db_dir` は `db_path.parent()`
+- `App::open`: `ToolService::new(db, catalog).with_sources(gaia_mcp::sources::registry(&config_path, ProtectedPaths { config_dir, db_dir, extra }))`。`config_dir` は `config_path.parent()`、`db_dir` は `db_path.parent()`、`extra` は `config::key_store_dir_with`（デスクトップの平文キー退避ディレクトリ `<XDG_DATA_HOME|~/.local/share>/gaia-library/keys`。`GAIA_DB` で DB を別の場所に置いても変わらない。HOME 無しなら省く）
 - `cli/query.rs` に `ResolveArgs` と `resolve(app, client, args)` を追加。`Command::Resolve(query::ResolveArgs)`
 
 ```rust
@@ -247,7 +247,7 @@ pub struct ResolveArgs {
 
 ### 4.5 desktop
 
-- `state.rs::load_initialization` と `first_run::setup`: CLI と同じ 1 行で注入。`ProtectedPaths.extra` にキーチェーン退避ディレクトリ（`keychain.rs` の `fallback_root`。公開関数を追加）を入れる
+- `state.rs::load_initialization` と `first_run::setup`: CLI と同じ 1 行で注入。`ProtectedPaths.extra` にキーチェーン退避ディレクトリ（`keychain.rs` の `fallback_root`。位置の算出は gaia-core の `config::key_store_dir_with` を使い、desktop は書き込み先としての検査だけを重ねる）を入れる
 - `commands::call_tool` を `async fn` にし `tauri::async_runtime::spawn_blocking` で `service.call` を実行（§11）
 - `desktop/ui/src/contextApi.ts` に `resolveReference(reference: Reference): Promise<ResolveSourceOutput>`（`callTool("resolve_source", { ref_id: reference.id, scope: reference.scope })`。参照自身の scope を使うので横断にならない）
 - `desktop/ui/src/types.ts` に `ResolveSourceOutput = { reference: Reference; resolved: boolean; content?: string; reason?: string }`

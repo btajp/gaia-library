@@ -25,14 +25,24 @@ use crate::{client_settings, first_run, keychain};
 
 /// resolve_source の解決器。設定は呼び出しごとに読み直し、設定・DB・キー退避ディレクトリは file 解決器が常時拒否する。
 pub(crate) fn sources_for(config_path: &Path, db_path: &Path) -> SourceRegistry {
+    let protected = protected_paths(config_path, db_path, &|name| std::env::var_os(name));
+    gaia_mcp::sources::registry(config_path, protected)
+}
+
+/// file 解決器が常時拒否する領域: 設定・DB のディレクトリと、平文キーの退避ディレクトリ（存在しなくてよい）。
+fn protected_paths(
+    config_path: &Path,
+    db_path: &Path,
+    lookup: &dyn Fn(&str) -> Option<OsString>,
+) -> ProtectedPaths {
     let mut protected = ProtectedPaths::new(
         config_path.parent().unwrap_or(Path::new("/")),
         db_path.parent().unwrap_or(Path::new("/")),
     );
-    if let Some(keys) = keychain::fallback_root_for_current_env() {
+    if let Ok(keys) = keychain::fallback_root(lookup) {
         protected = protected.with_extra(keys);
     }
-    gaia_mcp::sources::registry(config_path, protected)
+    protected
 }
 
 #[derive(Serialize)]
