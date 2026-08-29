@@ -9,7 +9,7 @@ use gaia_core::{
 use serde::Serialize;
 use serde_json::json;
 
-use crate::keychain::{self, StoreLocation};
+use crate::keychain::{self, MovedKey, StoreLocation};
 
 #[derive(Serialize)]
 pub(crate) struct ClientSummary {
@@ -43,7 +43,8 @@ pub(crate) struct RenamedClient {
     pub name: String,
     /// 旧名で保管していた現在のキーを新名へ移した場合の保管場所。キー無し・保管無しなら None。
     pub key_moved: Option<StoreLocation>,
-    /// 保管キーの付け替えに失敗した場合の案内（秘密を含まない）。
+    /// 保管キーの付け替えに失敗した場合、または旧名の保管項目を削除できず有効なキーが
+    /// 旧名で残っている場合の案内（秘密を含まない）。
     pub key_error: Option<String>,
 }
 
@@ -153,7 +154,7 @@ fn rename_with(
     path: &Path,
     old: &str,
     new: &str,
-    move_key: impl FnOnce(&str, &str, &str) -> Result<Option<StoreLocation>, String>,
+    move_key: impl FnOnce(&str, &str, &str) -> Result<Option<MovedKey>, String>,
 ) -> Result<RenamedClient, String> {
     let new = valid_name(new)?;
     // CLI の `gaia client rename` と同じ lock で直列化する。設定ファイルの参照（[[clients]].name、
@@ -175,7 +176,15 @@ fn rename_with(
     // 保管キーはクライアント名を鍵にしているため、設定の保存後に新名へ移す。
     let (key_moved, key_error) = match hash.map(|hash| move_key(old, new, &hash)) {
         None | Some(Ok(None)) => (None, None),
-        Some(Ok(Some(location))) => (Some(location), None),
+        Some(Ok(Some(moved))) => (
+            Some(moved.location),
+            // 移動はできたが旧名の項目を消せなかった場合は、有効なキーが旧名で残っている
+            // ことを警告する（接続設定には現在名＋現在ハッシュ照合のため表示されない）。
+            (!moved.old_removed).then(|| {
+                "保管キーを新しい名前へ移しましたが、以前の名前の保管項目を削除できませんでした。Keychain の gaia-library 項目とキー退避ファイルを確認してください。"
+                    .into()
+            }),
+        ),
         Some(Err(_)) => (
             None,
             Some(

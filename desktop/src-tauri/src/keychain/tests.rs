@@ -327,7 +327,10 @@ fn move_key_rekeys_keychain_entries_by_client_name() {
         move_with("bot", "robot", &hash, &backend, &|name| fixture
             .lookup(name))
         .unwrap(),
-        Some(StoreLocation::Keychain)
+        Some(MovedKey {
+            location: StoreLocation::Keychain,
+            old_removed: true,
+        })
     );
     assert_eq!(
         fixture.load(&backend, "robot", Some(&hash)).unwrap(),
@@ -350,7 +353,10 @@ fn move_key_rekeys_fallback_files_by_client_name_hash() {
         move_with("bot", "robot", &hash, &backend, &|name| fixture
             .lookup(name))
         .unwrap(),
-        Some(StoreLocation::File)
+        Some(MovedKey {
+            location: StoreLocation::File,
+            old_removed: true,
+        })
     );
     assert!(!fixture.path("bot").exists());
     assert_eq!(
@@ -420,21 +426,30 @@ fn move_key_leaves_stale_or_missing_keys_untouched() {
 }
 
 #[test]
-fn move_key_keeps_the_new_entry_when_the_old_one_cannot_be_deleted() {
+fn move_key_keeps_the_new_entry_and_reports_when_the_old_one_cannot_be_deleted() {
     let fixture = Fixture::new();
     let backend = FakeBackend::default();
     fixture.store(&backend, "bot", "current-test-secret");
     backend.fail_delete.set(true);
     let hash = hash_key("current-test-secret");
+    // 削除失敗は握りつぶさず old_removed=false で返す（有効なキーが旧名で残るため呼び出し側が警告する）。
     assert_eq!(
         move_with("bot", "robot", &hash, &backend, &|name| fixture
             .lookup(name))
         .unwrap(),
-        Some(StoreLocation::Keychain)
+        Some(MovedKey {
+            location: StoreLocation::Keychain,
+            old_removed: false,
+        })
     );
     assert_eq!(
         fixture.load(&backend, "robot", Some(&hash)).unwrap(),
         Some(("current-test-secret".into(), StoreLocation::Keychain))
+    );
+    // 旧名の項目は残ったまま（削除に失敗した状態の再現）
+    assert_eq!(
+        backend.keys.borrow().get("bot").map(String::as_str),
+        Some("current-test-secret")
     );
 }
 

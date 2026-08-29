@@ -247,7 +247,10 @@ fn rename_moves_config_references_and_the_stored_key_to_the_new_name() {
         assert!(saved.client("bot").is_none());
         assert_eq!(saved.keys["robot"], hash);
         moved.set(true);
-        Ok(Some(StoreLocation::Keychain))
+        Ok(Some(MovedKey {
+            location: StoreLocation::Keychain,
+            old_removed: true,
+        }))
     })
     .unwrap();
     assert!(moved.get());
@@ -351,6 +354,31 @@ fn rename_reports_a_failed_key_move_without_reverting_the_config() {
     assert_eq!(renamed.name, "bot");
     assert!(renamed.key_moved.is_none());
     assert!(renamed.key_error.is_none());
+}
+
+#[test]
+fn rename_warns_when_the_old_stored_key_cannot_be_deleted() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let mut config = config_at(&path);
+    config
+        .keys
+        .insert("bot".into(), auth::generate_key("bot").1);
+    config.save(&path).unwrap();
+
+    // 新名への保存はできたが、旧名の項目を消せなかった: 移動は成功として返し、警告だけ出す
+    let renamed = rename_with(&path, "bot", "robot", |_, _, _| {
+        Ok(Some(MovedKey {
+            location: StoreLocation::Keychain,
+            old_removed: false,
+        }))
+    })
+    .unwrap();
+    assert_eq!(renamed.name, "robot");
+    assert!(matches!(renamed.key_moved, Some(StoreLocation::Keychain)));
+    let warning = renamed.key_error.unwrap();
+    assert!(warning.contains("削除できませんでした"));
+    assert!(warning.contains("Keychain"));
 }
 
 fn paths() -> SnippetPaths<'static> {

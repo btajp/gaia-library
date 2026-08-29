@@ -85,14 +85,19 @@ pub fn load_matching_key(
     })
 }
 
+/// `move_key` の結果。新名での保管場所と、旧名の保管項目を消せたかを区別して返す。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MovedKey {
+    pub location: StoreLocation,
+    /// false のときは、現在も有効な平文キーが旧名の Keychain 項目・退避ファイルに残っている。
+    /// 呼び出し側はユーザーに警告する（接続設定は現在名＋現在ハッシュ照合のため誤表示はしない）。
+    pub old_removed: bool,
+}
+
 /// クライアント名の変更に合わせて保管キーを付け替える。Keychain の account もファイル名（名前の SHA-256）も
 /// クライアント名から決まるため、旧名で保管された現在のキー（`expected_hash` と一致するもの）だけを
 /// 新名で保存し直し、旧名の保管を消す。一致するキーが無ければ何もせず `None` を返す。
-pub fn move_key(
-    old: &str,
-    new: &str,
-    expected_hash: &str,
-) -> Result<Option<StoreLocation>, String> {
+pub fn move_key(old: &str, new: &str, expected_hash: &str) -> Result<Option<MovedKey>, String> {
     move_with(old, new, expected_hash, &SystemKeychain, &|name| {
         std::env::var_os(name)
     })
@@ -106,18 +111,23 @@ fn move_with(
     expected_hash: &str,
     backend: &dyn KeyBackend,
     lookup: Lookup<'_>,
-) -> Result<Option<StoreLocation>, String> {
+) -> Result<Option<MovedKey>, String> {
     let Some((plaintext, _)) = load_with(old, Some(expected_hash), backend, lookup)? else {
         return Ok(None);
     };
     let location = store_with(new, &plaintext, backend, lookup)?;
     // 新名で保存できてから旧名を消す。旧名の削除に失敗しても新名の保管は有効で、
-    // 旧名に残る項目は現在のハッシュと照合されるため接続設定へは出ない。
-    let _ = backend.delete(old);
+    // 旧名に残る項目は現在のハッシュと照合されるため接続設定へは出ないが、
+    // 有効な平文キーが残るため `old_removed = false` で呼び出し側に知らせる。
+    let mut old_removed = backend.delete(old).is_ok();
+    // 退避 root を決められない（HOME 未設定）場合は退避ファイル自体を作れないので削除対象なし。
     if let Ok(root) = fallback_root(lookup) {
-        let _ = remove_file(&root, old);
+        old_removed &= remove_file(&root, old).is_ok();
     }
-    Ok(Some(location))
+    Ok(Some(MovedKey {
+        location,
+        old_removed,
+    }))
 }
 
 fn store_with(
