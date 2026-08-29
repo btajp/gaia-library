@@ -68,6 +68,8 @@ describe("proposal queue presentation", () => {
 
   it("distinguishes first loading, empty results and retrieval limits", () => {
     const html = render(Proposals, { scope: "scope-a", decisions: new ProposalDecisions(), openDetail: noop });
+    expect(html).toContain("エージェント（Claude Code / narumi など）が送ってきた書き込みの検品場所");
+    expect(html).toContain("承認するまでデータ本体には入りません");
     expect(html).toContain("提案を読み込んでいます");
     expect(html).not.toContain("提案はありません");
     expect(html).toContain("新しい順に最大 50 件");
@@ -109,6 +111,7 @@ describe("manual form and operation presentation", () => {
   it("starts with no save operation and does not send anything during rendering", () => {
     const html = render(AddForms, { scope: "scope-a", controller: new ManualSave(), openDetail: noop, restoreOperation: noop, showProposals: noop });
     expect(html).toContain("提案・承認して保存");
+    expect(html).toContain("自分の手で記憶を登録します");
     expect(html).toContain("任意項目は空欄なら送信しません");
     expect(html).toContain("human クライアント");
     expect(html).not.toContain("保存済みです");

@@ -106,6 +106,10 @@ describe("initial screen markup", () => {
 
   it("labels required setup fields and disables empty submission", () => {
     const html = renderToStaticMarkup(createElement(FirstRun, { onComplete: () => {} }));
+    expect(html).toContain("エージェントは提案まで、承認はあなた（human）だけ");
+    expect(html).toContain("最初の機密境界（scope）の名前になります");
+    expect(html).toContain("desktop:&lt;名前&gt;");
+    expect(html).toContain("後から設定画面で変更できます");
     expect(html).toContain('for="affiliation"');
     expect(html).toContain('for="user-name"');
     expect(html).toContain('type="submit" disabled=""');

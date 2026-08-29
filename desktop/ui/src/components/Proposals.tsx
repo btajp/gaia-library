@@ -49,6 +49,7 @@ export default function Proposals({ scope, decisions, openDetail }: Props) {
   return (
     <div className="space-y-5">
       <h2 className="text-xl font-semibold">提案キュー</h2>
+      <p className="text-sm text-neutral-400">接続したエージェント（Claude Code / narumi など）が送ってきた書き込みの検品場所です。承認するまでデータ本体には入りません。</p>
       <p className="text-sm text-neutral-400">提案内容と出典を確認し、未承認の提案だけを承認・却下できます。操作は各提案の scope に限定します。</p>
       <p className="break-words text-xs text-neutral-400">対象 scope: {scope || "未確認"}</p>
       <div className="flex flex-wrap items-end gap-3">

@@ -653,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "gaia"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -670,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "gaia-core"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "jsonschema",
  "libc",
@@ -696,7 +696,7 @@ dependencies = [
 
 [[package]]
 name = "gaia-mcp"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "axum",
  "futures-core",
