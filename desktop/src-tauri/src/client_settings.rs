@@ -38,6 +38,15 @@ pub(crate) struct ConnectionSnippet {
     pub key_storage: Option<StoreLocation>,
 }
 
+#[derive(Serialize)]
+pub(crate) struct RenamedClient {
+    pub name: String,
+    /// 旧名で保管していた現在のキーを新名へ移した場合の保管場所。キー無し・保管無しなら None。
+    pub key_moved: Option<StoreLocation>,
+    /// 保管キーの付け替えに失敗した場合の案内（秘密を含まない）。
+    pub key_error: Option<String>,
+}
+
 pub(crate) fn list(path: &Path) -> Result<Vec<ClientSummary>, String> {
     let config = Config::load(path).map_err(|e| e.to_string())?;
     Ok(config
@@ -133,6 +142,52 @@ fn keygen_with(
     Ok(IssuedKey {
         storage: store_with(name, &key, store),
         key,
+    })
+}
+
+pub(crate) fn rename(path: &Path, old: &str, new: &str) -> Result<RenamedClient, String> {
+    rename_with(path, old, new, keychain::move_key)
+}
+
+fn rename_with(
+    path: &Path,
+    old: &str,
+    new: &str,
+    move_key: impl FnOnce(&str, &str, &str) -> Result<Option<StoreLocation>, String>,
+) -> Result<RenamedClient, String> {
+    let new = valid_name(new)?;
+    // CLI の `gaia client rename` と同じ lock で直列化する。設定ファイルの参照（[[clients]].name、
+    // [cli].default_client、[keys]）だけを付け替え、DB の履歴（proposed_by / decided_by / actor）は書き換えない。
+    let mut missing = false;
+    let hash = Config::update(path, |config| {
+        if config.client(old).is_none() {
+            missing = true;
+            return Err(ConfigError::UnknownClient(old.into()));
+        }
+        config.rename_client(old, new)?;
+        Ok(config.keys.get(new).cloned())
+    })
+    .map_err(|error| match error {
+        ConfigError::UnknownClient(_) if missing => "指定されたクライアントがありません".into(),
+        ConfigError::DuplicateClient(_) => "同じ名前のクライアントが既にあります".into(),
+        error => error.to_string(),
+    })?;
+    // 保管キーはクライアント名を鍵にしているため、設定の保存後に新名へ移す。
+    let (key_moved, key_error) = match hash.map(|hash| move_key(old, new, &hash)) {
+        None | Some(Ok(None)) => (None, None),
+        Some(Ok(Some(location))) => (Some(location), None),
+        Some(Err(_)) => (
+            None,
+            Some(
+                "保管中のキーを新しい名前へ移せませんでした。HTTP 接続設定を再表示するにはキーを再発行してください。"
+                    .into(),
+            ),
+        ),
+    };
+    Ok(RenamedClient {
+        name: new.into(),
+        key_moved,
+        key_error,
     })
 }
 

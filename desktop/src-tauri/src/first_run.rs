@@ -96,7 +96,6 @@ fn setup_with_publisher(
     let sources = crate::state::sources_for(config_path, db_path);
     let app_state = AppState::new(
         Arc::new(ToolService::new(db, catalog).with_sources(sources)),
-        human,
         config_path.to_path_buf(),
         db_path.to_path_buf(),
     );

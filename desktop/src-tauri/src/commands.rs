@@ -47,9 +47,13 @@ pub async fn call_tool(
     // ToolService::call は同期。resolve_source のように最長数十秒ブロックするツールがあるため、
     // 全ツール一律でブロッキング用スレッドへ逃がし、画面や他のコマンドを止めない。
     tauri::async_runtime::spawn_blocking(move || {
+        // human は設定から都度読む（改名後の承認・却下を新名で記録する）。
+        let human = runtime
+            .human()
+            .map_err(|error| ToolError::internal(error).to_json())?;
         runtime
             .service
-            .call(&runtime.human, &name, args)
+            .call(&human, &name, args)
             .map_err(|error| error.to_json())
     })
     .await

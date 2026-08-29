@@ -2,14 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { errorMessage } from "../../api";
 import { useLatestRequest } from "../../hooks/useLatestRequest";
 import { snapshotForKey } from "../../lib/latestRequest";
-import { adminClientAdd, adminClientKeygen, adminClientList, type ClientInput, type ClientSummary, type ConnectionSnippet, type IssuedClientKey, type Transport } from "../../settingsApi";
+import { adminClientAdd, adminClientKeygen, adminClientList, adminClientRename, type ClientInput, type ClientSummary, type ConnectionSnippet, type IssuedClientKey, type RenamedClient, type Transport } from "../../settingsApi";
 import ClientForm from "./ClientForm";
+import ClientRenameForm from "./ClientRenameForm";
 import { IssuedClientSecret, SnippetPanel } from "./ClientSecrets";
 import { buttonClass, primaryClass, ReloadButton, SettingsError, SettingsSection } from "./SettingsParts";
 import { useSettingsAction, useSettingsResource } from "./useSettingsState";
 import { requestSnippet, snippetKey } from "./snippetRequest";
 
-type ClientChange = { name: string; issued: IssuedClientKey | null };
+type ClientChange = { name: string; issued: IssuedClientKey | null; renamed?: RenamedClient };
 type SnippetTarget = { name: string; transport: Transport };
 
 export function KeyConfirmation({ client, busy, confirm, cancel }: { client: ClientSummary; busy: boolean; confirm: () => void; cancel: () => void }) {
@@ -34,8 +35,10 @@ export default function ClientsSettings() {
   const { action, snapshot, busy } = useSettingsAction<ClientChange>();
   const { request: snippetRequest, snapshot: snippetSnapshot } = useLatestRequest<ConnectionSnippet>();
   const [confirmation, setConfirmation] = useState<ClientSummary | null>(null);
+  const [renaming, setRenaming] = useState<ClientSummary | null>(null);
   const [snippet, setSnippet] = useState<SnippetTarget | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
 
   useEffect(() => snippetRequest.reset, [snippetRequest]);
 
@@ -44,10 +47,16 @@ export default function ClientsSettings() {
     setSnippet(null);
   }
 
+  function clearMessages() {
+    setNotice(null);
+    setWarning(null);
+  }
+
   async function addClient(input: ClientInput) {
     closeSnippet();
     setConfirmation(null);
-    setNotice(null);
+    setRenaming(null);
+    clearMessages();
     const result = await action.run(async () => ({ name: input.name.trim(), issued: await adminClientAdd(input) }));
     if (!result) return false;
     setNotice(`クライアント「${result.data.name}」を追加しました。`);
@@ -59,7 +68,7 @@ export default function ClientsSettings() {
     if (!confirmation) return;
     const name = confirmation.name;
     closeSnippet();
-    setNotice(null);
+    clearMessages();
     const result = await action.run(async () => ({ name, issued: await adminClientKeygen(name) }));
     if (result) {
       setConfirmation(null);
@@ -68,18 +77,47 @@ export default function ClientsSettings() {
     }
   }
 
+  async function renameClient(newName: string) {
+    if (!renaming) return false;
+    const oldName = renaming.name;
+    closeSnippet();
+    clearMessages();
+    const result = await action.run(async () => {
+      const renamed = await adminClientRename(oldName, newName);
+      return { name: renamed.name, issued: null, renamed };
+    });
+    if (!result?.data.renamed) return false;
+    const renamed = result.data.renamed;
+    setRenaming(null);
+    setNotice(`「${oldName}」を「${renamed.name}」に変更しました。配布済みの stdio 接続設定は出し直してください。${renamed.key_moved ? "保管中のキーも新しい名前へ移しました。" : ""}`);
+    setWarning(renamed.key_error);
+    void refresh();
+    return true;
+  }
+
   function beginConfirmation(client: ClientSummary) {
     if (busy) return;
     if (snapshot.status !== "success") action.reset();
-    setNotice(null);
+    clearMessages();
     closeSnippet();
+    setRenaming(null);
     setConfirmation(client);
+  }
+
+  function beginRename(client: ClientSummary) {
+    if (busy) return;
+    if (snapshot.status !== "success") action.reset();
+    clearMessages();
+    closeSnippet();
+    setConfirmation(null);
+    setRenaming(client);
   }
 
   function showSnippet(name: string, transport: Transport) {
     if (busy) return;
     if (snapshot.status !== "success") action.reset();
     setConfirmation(null);
+    setRenaming(null);
     setSnippet({ name, transport });
     void requestSnippet(snippetRequest, name, transport);
   }
@@ -99,6 +137,7 @@ export default function ClientsSettings() {
                   <p className="mt-1 break-words text-xs leading-5 text-neutral-400">役割: {client.role} / 既定 scope: {client.default_scope ?? "なし（呼び出し時に明示）"} / キー: {client.has_key ? "発行済み" : "未発行"}</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  <button type="button" disabled={busy} onClick={() => beginRename(client)} className={buttonClass}>名前を変更…</button>
                   <button type="button" disabled={busy} onClick={() => beginConfirmation(client)} className={buttonClass}>{client.has_key ? "キーを再発行…" : "キーを発行…"}</button>
                   <button type="button" disabled={busy} onClick={() => showSnippet(client.name, "http")} className={buttonClass}>HTTP 接続設定を表示</button>
                   <button type="button" disabled={busy} onClick={() => showSnippet(client.name, "stdio")} className={buttonClass}>stdio 接続設定を表示</button>
@@ -109,8 +148,10 @@ export default function ClientsSettings() {
         )
       )}
       {notice && <p role="status" className="break-words text-sm text-emerald-300">{notice}</p>}
+      {warning && <p role="alert" className="break-words text-sm leading-6 text-amber-200">{warning}</p>}
       {snapshot.status === "error" && <SettingsError>変更を完了できませんでした。{errorMessage(snapshot.error)}</SettingsError>}
       {confirmation && <KeyConfirmation client={confirmation} busy={busy} confirm={() => void issueKey()} cancel={() => setConfirmation(null)} />}
+      {renaming && <ClientRenameForm key={renaming.name} client={renaming} busy={busy} onSubmit={renameClient} cancel={() => setRenaming(null)} />}
       {snapshot.status === "success" && snapshot.data?.issued && <IssuedClientSecret name={snapshot.data.name} issued={snapshot.data.issued} onClose={action.reset} />}
       {snippet && <SnippetPanel key={snippetKey(snippet.name, snippet.transport)} {...snippet} snapshot={snapshotForKey(snippetSnapshot, snippetKey(snippet.name, snippet.transport))} refresh={() => void requestSnippet(snippetRequest, snippet.name, snippet.transport)} onClose={closeSnippet} />}
       <ClientForm busy={busy} onSubmit={addClient} />

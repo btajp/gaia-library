@@ -5,7 +5,9 @@ use tauri::State;
 
 use crate::{
     cli_link::{self, LinkStatus},
-    client_settings::{self, ClientSummary, ConnectionSnippet, IssuedKey, SnippetPaths},
+    client_settings::{
+        self, ClientSummary, ConnectionSnippet, IssuedKey, RenamedClient, SnippetPaths,
+    },
     state::DesktopState,
 };
 
@@ -48,7 +50,7 @@ pub(crate) async fn admin_affiliation_add(
         .run_settings(move |runtime| {
             admin::add_affiliation(
                 runtime.service.db(),
-                &runtime.human.name,
+                &runtime.human()?.name,
                 name.trim(),
                 identity
                     .as_deref()
@@ -112,6 +114,21 @@ pub(crate) async fn admin_client_keygen(
         .await?;
     let _ = state.start_http().await;
     Ok(result)
+}
+
+/// クライアント名の変更。設定ファイルの参照と保管キーだけを付け替え、DB の履歴は書き換えない。
+/// アプリ自身の human を改名しても、以降の呼び出しは設定を読み直して新名で行う。
+#[tauri::command]
+pub(crate) async fn admin_client_rename(
+    state: State<'_, DesktopState>,
+    old_name: String,
+    new_name: String,
+) -> Result<RenamedClient, String> {
+    state
+        .run_settings(move |runtime| {
+            client_settings::rename(&runtime.config_path, &old_name, &new_name)
+        })
+        .await
 }
 
 #[tauri::command]

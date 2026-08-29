@@ -34,6 +34,8 @@ pub enum StoreLocation {
 trait KeyBackend {
     fn store(&self, client: &str, plaintext: &str) -> Result<(), ()>;
     fn load(&self, client: &str) -> Result<Option<String>, ()>;
+    /// 項目が無い場合も成功として扱う。
+    fn delete(&self, client: &str) -> Result<(), ()>;
 }
 
 struct SystemKeychain;
@@ -49,6 +51,13 @@ impl KeyBackend for SystemKeychain {
         match keyring::Entry::new(APP_DIR, client).and_then(|entry| entry.get_password()) {
             Ok(plaintext) => Ok(Some(plaintext)),
             Err(keyring::Error::NoEntry) => Ok(None),
+            Err(_) => Err(()),
+        }
+    }
+
+    fn delete(&self, client: &str) -> Result<(), ()> {
+        match keyring::Entry::new(APP_DIR, client).and_then(|entry| entry.delete_credential()) {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(_) => Err(()),
         }
     }
@@ -76,7 +85,40 @@ pub fn load_matching_key(
     })
 }
 
+/// クライアント名の変更に合わせて保管キーを付け替える。Keychain の account もファイル名（名前の SHA-256）も
+/// クライアント名から決まるため、旧名で保管された現在のキー（`expected_hash` と一致するもの）だけを
+/// 新名で保存し直し、旧名の保管を消す。一致するキーが無ければ何もせず `None` を返す。
+pub fn move_key(
+    old: &str,
+    new: &str,
+    expected_hash: &str,
+) -> Result<Option<StoreLocation>, String> {
+    move_with(old, new, expected_hash, &SystemKeychain, &|name| {
+        std::env::var_os(name)
+    })
+}
+
 type Lookup<'a> = &'a dyn Fn(&str) -> Option<OsString>;
+
+fn move_with(
+    old: &str,
+    new: &str,
+    expected_hash: &str,
+    backend: &dyn KeyBackend,
+    lookup: Lookup<'_>,
+) -> Result<Option<StoreLocation>, String> {
+    let Some((plaintext, _)) = load_with(old, Some(expected_hash), backend, lookup)? else {
+        return Ok(None);
+    };
+    let location = store_with(new, &plaintext, backend, lookup)?;
+    // 新名で保存できてから旧名を消す。旧名の削除に失敗しても新名の保管は有効で、
+    // 旧名に残る項目は現在のハッシュと照合されるため接続設定へは出ない。
+    let _ = backend.delete(old);
+    if let Ok(root) = fallback_root(lookup) {
+        let _ = remove_file(&root, old);
+    }
+    Ok(Some(location))
+}
 
 fn store_with(
     client: &str,
@@ -240,6 +282,16 @@ struct TemporaryKey<'a> {
 impl Drop for TemporaryKey<'_> {
     fn drop(&mut self) {
         let _ = fs::unlinkat(self.directory, self.name.as_str(), AtFlags::empty());
+    }
+}
+
+fn remove_file(root: &Path, client: &str) -> Result<(), String> {
+    let Some(directory) = open_directory(root, false)? else {
+        return Ok(());
+    };
+    match fs::unlinkat(&directory, key_filename(client), AtFlags::empty()) {
+        Ok(()) | Err(Errno::NOENT) => Ok(()),
+        Err(error) => Err(format!("旧名の保管キーを削除できません: {error}")),
     }
 }
 

@@ -66,6 +66,26 @@ describe("settings IPC boundary", () => {
     expect(invoke).toHaveBeenCalledWith("admin_client_keygen", { name: "reader" });
   });
 
+  it("renames a client with the trimmed new name and returns the result unchanged", async () => {
+    const renamed = { name: "writer", key_moved: "keychain", key_error: null };
+    invoke.mockResolvedValueOnce(renamed);
+    expect(await api.adminClientRename("reader", " writer ")).toBe(renamed);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith("admin_client_rename", { oldName: "reader", newName: "writer" });
+  });
+
+  it("does not invoke a rename for a blank or unchanged name", async () => {
+    await expect(api.adminClientRename("reader", "   ")).rejects.toThrow("入力してください");
+    await expect(api.adminClientRename("reader", " reader ")).rejects.toThrow("同じ名前");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("preserves a duplicate-name failure without retrying", async () => {
+    invoke.mockRejectedValueOnce("同じ名前のクライアントが既にあります");
+    await expect(api.adminClientRename("reader", "owner")).rejects.toBe("同じ名前のクライアントが既にあります");
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
   for (const transport of ["http", "stdio"]) {
     it(`requests a ${transport} snippet only on invocation`, async () => {
       const snippet = { text: "test-only-snippet", key_storage: transport === "http" ? "keychain" : null };

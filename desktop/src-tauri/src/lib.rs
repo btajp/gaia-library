@@ -43,6 +43,7 @@ pub fn run() {
             settings_commands::admin_client_add,
             settings_commands::admin_client_list,
             settings_commands::admin_client_keygen,
+            settings_commands::admin_client_rename,
             settings_commands::mcp_config_snippet,
             settings_commands::cli_link_status,
             settings_commands::cli_link_create,
