@@ -144,7 +144,7 @@ pub fn client(config_path: &Path, cmd: &ClientCmd, compact: bool) -> anyhow::Res
             })
             .map_err(config_update_error)?;
             let notice = format!(
-                "stdio 接続設定には --client {renamed} が入るため、配布済みの接続設定を出し直してください。HTTP のキーは有効なままです"
+                "stdio 接続設定には --client {renamed} が入るため、配布済みの接続設定を出し直してください。HTTP のキーは有効なままです（接続中のセッションは一度 404 になり、同じキーの initialize で新名につながります）。デスクトップでキーを保管しているクライアントは、デスクトップの「名前を変更…」で改名するか、改名後にデスクトップでキーを再発行してください"
             );
             if compact {
                 print_json(
@@ -182,6 +182,9 @@ fn config_update_error(error: ConfigError) -> anyhow::Error {
         }
         ConfigError::EmptyClientName => {
             ToolError::invalid_params("クライアント名を空にはできません").into()
+        }
+        ConfigError::InvalidClientName => {
+            ToolError::invalid_params("クライアント名に制御文字は使えません").into()
         }
         error => error.into(),
     }

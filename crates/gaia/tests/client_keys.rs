@@ -279,6 +279,8 @@ fn rename_moves_config_references_and_keeps_keys_and_history() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("--client robot"));
     assert!(stderr.contains("HTTP のキーは有効なまま"));
+    // デスクトップ保管キーは CLI の rename では移らないため、案内を含める
+    assert!(stderr.contains("デスクトップ"));
 
     let config = Config::load(&config_path).unwrap();
     assert_eq!(config.cli.default_client.as_deref(), Some("me"));
@@ -332,6 +334,7 @@ fn rename_moves_config_references_and_keeps_keys_and_history() {
         (["client", "rename", "bot", "other"], "not_found"),
         (["client", "rename", "robot", "me"], "conflict"),
         (["client", "rename", "robot", "  "], "invalid_params"),
+        (["client", "rename", "robot", "bad\nname"], "invalid_params"),
     ] {
         let error = json_error(gaia(dir.path()).args(args));
         assert_eq!(error["code"], code, "{args:?}");
