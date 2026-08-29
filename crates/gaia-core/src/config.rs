@@ -410,6 +410,8 @@ pub enum ConfigError {
     UnknownClient(String),
     #[error("client `{0}` already exists")]
     DuplicateClient(String),
+    #[error("client name must not be empty")]
+    EmptyClientName,
     #[error("API key hash for client `{0}` must be 64 hexadecimal characters")]
     InvalidKeyHash(String),
     #[error("clients `{first}` and `{second}` share the same API key hash")]
@@ -584,6 +586,33 @@ impl Config {
             return Err(ConfigError::DuplicateClient(client.name));
         }
         self.clients.push(client);
+        Ok(())
+    }
+
+    /// クライアント名を変更する。role / default_scope は変えず、`[cli].default_client` と `[keys]` の
+    /// 参照だけを新名へ付け替える（キーのハッシュは同じなので HTTP のキーは有効なまま）。
+    /// DB の履歴（proposals の proposed_by / decided_by、audit_log の actor）は書き換えない。
+    /// 呼び出しは `Config::update` の lock 内で行うこと。
+    pub fn rename_client(&mut self, old: &str, new: &str) -> Result<(), ConfigError> {
+        let new = new.trim();
+        if new.is_empty() {
+            return Err(ConfigError::EmptyClientName);
+        }
+        if self.clients.iter().any(|c| c.name == new) {
+            return Err(ConfigError::DuplicateClient(new.to_owned()));
+        }
+        let client = self
+            .clients
+            .iter_mut()
+            .find(|c| c.name == old)
+            .ok_or_else(|| ConfigError::UnknownClient(old.to_owned()))?;
+        client.name = new.to_owned();
+        if self.cli.default_client.as_deref() == Some(old) {
+            self.cli.default_client = Some(new.to_owned());
+        }
+        if let Some(hash) = self.keys.remove(old) {
+            self.keys.insert(new.to_owned(), hash);
+        }
         Ok(())
     }
 
