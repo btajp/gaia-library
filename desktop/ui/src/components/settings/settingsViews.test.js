@@ -18,6 +18,8 @@ describe("settings screen markup", () => {
   it("renders all sections without generating keys, links or snippets", () => {
     const html = renderToStaticMarkup(createElement(StrictMode, null, createElement(Settings)));
     for (const title of ["所属元", "クライアントと接続キー", "HTTP サーバー", "同梱 CLI", "バージョン"]) expect(html).toContain(title);
+    expect(html).toContain("接続元（クライアント）と機密境界（所属元 = scope）の管理です");
+    expect(html).toContain("エージェント用のキー発行、接続設定の表示、名前の変更、CLI リンクを行います");
     expect(html).toContain("読込中…");
     expect(html).toContain("アップデートを確認…");
     expect(html).toContain("更新の適用と再起動は、その画面で選択できます");

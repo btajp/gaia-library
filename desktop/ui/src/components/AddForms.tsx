@@ -53,7 +53,7 @@ export default function AddForms({ scope, controller, openDetail, restoreOperati
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-semibold">手入力</h2>
-        <p className="mt-2 text-sm leading-6 text-neutral-400">新規追加専用です。保存時は提案を作成し、このアプリの human クライアントで承認まで実行します。</p>
+        <p className="mt-2 text-sm leading-6 text-neutral-400">自分の手で記憶を登録します。保存は提案の作成と、このアプリの human クライアントによる承認を 1 操作で行います。新規追加専用です。</p>
         <p className="mt-1 text-xs text-neutral-400">任意項目は空欄なら送信しません。日付・状態・種別に自動の初期値は入れません。</p>
       </div>
       {operation && <ManualSaveStatus operation={operation} controller={controller} openDetail={openDetail} showProposals={showProposals} onClear={clearOperation} />}

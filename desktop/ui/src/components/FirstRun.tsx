@@ -57,13 +57,16 @@ export default function FirstRun({ onComplete }: Props) {
         記憶を分ける所属元と、このアプリで使うユーザーを登録します。
         エージェント「claude-code」の接続キーも発行し、Keychain または権限 0600 のファイルへ保管します。
       </p>
+      <p className="mt-2 text-sm leading-6 text-neutral-400">
+        エージェントは提案まで、承認はあなた（human）だけ、という役割分担で動きます。
+      </p>
       <form onSubmit={submit} className="mt-6 space-y-5" aria-busy={busy}>
         <div>
           <label htmlFor="affiliation" className="block text-sm font-medium">
             所属元名
           </label>
           <p id="affiliation-help" className="mt-1 text-xs text-neutral-400">
-            情報を共有する範囲（scope）の名前です。会社名や個人用の名前を入力します。
+            最初の機密境界（scope）の名前になります。データはこの境界の中に保存されます。会社名や個人用の名前を入力します。
           </p>
           <input
             id="affiliation"
@@ -83,7 +86,7 @@ export default function FirstRun({ onComplete }: Props) {
             ユーザー名
           </label>
           <p id="user-name-help" className="mt-1 text-xs text-neutral-400">
-            このアプリから提案を承認する、人間のクライアント名です。
+            あなたの human クライアント名（{"desktop:<名前>"}）になります。承認・登録の履歴にこの名前が記録されます。後から設定画面で変更できます。
           </p>
           <input
             id="user-name"
