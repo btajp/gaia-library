@@ -156,4 +156,10 @@ describe("reference resolution", () => {
     invoke.mockRejectedValueOnce({ code: "busy", message: "resolver `narumi` is busy; retry later" });
     await expect(context.resolveReference(reference)).rejects.toBeInstanceOf(GaiaError);
   });
+
+  it("shows a pending note that does not promise a fixed timeout", () => {
+    // 上限は [sources] の設定次第なので、UI の文言に秒数を含めない
+    expect(context.RESOLVE_PENDING_NOTE).toBe("取得中…（時間がかかることがあります）");
+    expect(context.RESOLVE_PENDING_NOTE).not.toMatch(/\d+ ?秒/);
+  });
 });

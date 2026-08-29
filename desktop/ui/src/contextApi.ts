@@ -82,7 +82,7 @@ export async function copyReferenceUri(
   }
 }
 
-export const RESOLVE_TIMEOUT_NOTE = "取得中…（最長 30 秒）";
+export const RESOLVE_PENDING_NOTE = "取得中…（時間がかかることがあります）";
 
 /// 参照自身の scope で resolve_source を呼ぶ（横断にならない）。結果は呼び出し側の state にだけ置く。
 export async function resolveReference(reference: Reference): Promise<ResolveSourceOutput> {

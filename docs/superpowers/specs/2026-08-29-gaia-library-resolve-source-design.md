@@ -251,7 +251,7 @@ pub struct ResolveArgs {
 - `commands::call_tool` を `async fn` にし `tauri::async_runtime::spawn_blocking` で `service.call` を実行（§11）
 - `desktop/ui/src/contextApi.ts` に `resolveReference(reference: Reference): Promise<ResolveSourceOutput>`（`callTool("resolve_source", { ref_id: reference.id, scope: reference.scope })`。参照自身の scope を使うので横断にならない）
 - `desktop/ui/src/types.ts` に `ResolveSourceOutput = { reference: Reference; resolved: boolean; content?: string; reason?: string }`
-- `RefList.tsx` の `ReferenceRow` に「内容を取得」ボタン（既存の「URI をコピー」と同じ `pending` / `mounted` パターン）。取得中は「取得中…（最長 30 秒）」。結果は `<pre className="whitespace-pre-wrap break-words">` でテキストとして描画（`dangerouslySetInnerHTML` と Markdown レンダリングは使わない）。`reason` は注記行に表示。`resolved=false` なら amber の帯に reason を出し、`snapshot` の `<details>` を `open` にする。ToolError は既存の `errorMessage` 表示。結果は state に持つだけで localStorage・ログに保存しない
+- `RefList.tsx` の `ReferenceRow` に「内容を取得」ボタン（既存の「URI をコピー」と同じ `pending` / `mounted` パターン）。取得中は「取得中…（時間がかかることがあります）」（上限は設定次第なので秒数を出さない）。結果は `<pre className="whitespace-pre-wrap break-words">` でテキストとして描画（`dangerouslySetInnerHTML` と Markdown レンダリングは使わない）。`reason` は注記行に表示。`resolved=false` なら amber の帯に reason を出し、`snapshot` の `<details>` を `open` にする。ToolError は既存の `errorMessage` 表示。結果は state に持つだけで localStorage・ログに保存しない
 - `[sources]` の設定画面・narumi 接続テストは作らない（README で TOML 手編集を案内）
 
 ### 4.6 依存の変更

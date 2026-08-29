@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { errorMessage } from "../api";
-import { RESOLVE_TIMEOUT_NOTE, copyReferenceUri, resolveReference } from "../contextApi";
+import { RESOLVE_PENDING_NOTE, copyReferenceUri, resolveReference } from "../contextApi";
 import type { Reference, ResolveSourceOutput } from "../types";
 import Badge from "./Badges";
 
@@ -100,7 +100,7 @@ function ReferenceRow({ reference }: { reference: Reference }) {
           {busy ? "コピー中…" : "URI をコピー"}
         </button>
         <button type="button" onClick={resolve} disabled={resolving} className="rounded border border-neutral-700 px-3 py-1 text-xs hover:bg-neutral-800 disabled:opacity-50">
-          {resolving ? RESOLVE_TIMEOUT_NOTE : "内容を取得"}
+          {resolving ? RESOLVE_PENDING_NOTE : "内容を取得"}
         </button>
       </div>
       {feedback && <p role="status" className="mt-2 text-xs text-neutral-300">{feedback}</p>}
