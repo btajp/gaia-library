@@ -11,6 +11,7 @@ use super::*;
 struct FakeBackend {
     fail_store: Cell<bool>,
     fail_load: Cell<bool>,
+    fail_delete: Cell<bool>,
     keys: RefCell<BTreeMap<String, String>>,
     loads: Cell<usize>,
 }
@@ -33,6 +34,14 @@ impl KeyBackend for FakeBackend {
         } else {
             Ok(self.keys.borrow().get(client).cloned())
         }
+    }
+
+    fn delete(&self, client: &str) -> Result<(), ()> {
+        if self.fail_delete.get() {
+            return Err(());
+        }
+        self.keys.borrow_mut().remove(client);
+        Ok(())
     }
 }
 
@@ -304,6 +313,143 @@ fn hard_linked_file_is_not_read_and_atomic_store_preserves_other_name() {
     assert_eq!(
         fixture.load(&backend, "bot", None).unwrap().unwrap().0,
         "new-test-secret"
+    );
+}
+
+#[test]
+fn move_key_rekeys_keychain_entries_by_client_name() {
+    // 保管の鍵はクライアント名（Keychain の account）なので、改名時は新名へ保存し直して旧名を消す。
+    let fixture = Fixture::new();
+    let backend = FakeBackend::default();
+    fixture.store(&backend, "bot", "current-test-secret");
+    let hash = hash_key("current-test-secret");
+    assert_eq!(
+        move_with("bot", "robot", &hash, &backend, &|name| fixture
+            .lookup(name))
+        .unwrap(),
+        Some(MovedKey {
+            location: StoreLocation::Keychain,
+            old_removed: true,
+        })
+    );
+    assert_eq!(
+        fixture.load(&backend, "robot", Some(&hash)).unwrap(),
+        Some(("current-test-secret".into(), StoreLocation::Keychain))
+    );
+    assert!(fixture.load(&backend, "bot", None).unwrap().is_none());
+    assert!(!backend.keys.borrow().contains_key("bot"));
+    // 退避ディレクトリには何も書かない
+    assert!(!fixture.root().exists());
+}
+
+#[test]
+fn move_key_rekeys_fallback_files_by_client_name_hash() {
+    // ファイル名はクライアント名の SHA-256 なので、改名時は新名のファイルを作り旧名のファイルを消す。
+    let fixture = Fixture::new();
+    let backend = fallback_backend();
+    fixture.store(&backend, "bot", "current-test-secret");
+    let hash = hash_key("current-test-secret");
+    assert_eq!(
+        move_with("bot", "robot", &hash, &backend, &|name| fixture
+            .lookup(name))
+        .unwrap(),
+        Some(MovedKey {
+            location: StoreLocation::File,
+            old_removed: true,
+        })
+    );
+    assert!(!fixture.path("bot").exists());
+    assert_eq!(
+        fs::metadata(fixture.path("robot"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    assert_eq!(
+        fixture.load(&backend, "robot", Some(&hash)).unwrap(),
+        Some(("current-test-secret".into(), StoreLocation::File))
+    );
+    assert!(fixture.load(&backend, "bot", None).unwrap().is_none());
+    assert_eq!(fs::read_dir(fixture.root()).unwrap().count(), 1);
+}
+
+#[test]
+fn move_key_leaves_stale_or_missing_keys_untouched() {
+    let fixture = Fixture::new();
+    let backend = FakeBackend::default();
+    // 何も保管されていない
+    assert_eq!(
+        move_with(
+            "bot",
+            "robot",
+            &hash_key("current-test-secret"),
+            &backend,
+            &|name| fixture.lookup(name)
+        )
+        .unwrap(),
+        None
+    );
+    assert!(backend.keys.borrow().is_empty());
+    // 現在の設定ハッシュと一致しない古いキーは移さない（新名の保管も作らない）
+    fixture.store(&backend, "bot", "old-test-secret");
+    assert_eq!(
+        move_with(
+            "bot",
+            "robot",
+            &hash_key("current-test-secret"),
+            &backend,
+            &|name| fixture.lookup(name)
+        )
+        .unwrap(),
+        None
+    );
+    assert_eq!(
+        backend.keys.borrow().get("bot").map(String::as_str),
+        Some("old-test-secret")
+    );
+    assert!(!backend.keys.borrow().contains_key("robot"));
+    assert!(!fixture.root().exists());
+    // 読み取り失敗は不在として扱わない
+    backend.fail_load.set(true);
+    assert!(
+        move_with(
+            "bot",
+            "robot",
+            &hash_key("old-test-secret"),
+            &backend,
+            &|name| fixture.lookup(name)
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn move_key_keeps_the_new_entry_and_reports_when_the_old_one_cannot_be_deleted() {
+    let fixture = Fixture::new();
+    let backend = FakeBackend::default();
+    fixture.store(&backend, "bot", "current-test-secret");
+    backend.fail_delete.set(true);
+    let hash = hash_key("current-test-secret");
+    // 削除失敗は握りつぶさず old_removed=false で返す（有効なキーが旧名で残るため呼び出し側が警告する）。
+    assert_eq!(
+        move_with("bot", "robot", &hash, &backend, &|name| fixture
+            .lookup(name))
+        .unwrap(),
+        Some(MovedKey {
+            location: StoreLocation::Keychain,
+            old_removed: false,
+        })
+    );
+    assert_eq!(
+        fixture.load(&backend, "robot", Some(&hash)).unwrap(),
+        Some(("current-test-secret".into(), StoreLocation::Keychain))
+    );
+    // 旧名の項目は残ったまま（削除に失敗した状態の再現）
+    assert_eq!(
+        backend.keys.borrow().get("bot").map(String::as_str),
+        Some("current-test-secret")
     );
 }
 

@@ -829,3 +829,164 @@ fn sources_validation_rejects_out_of_range_and_malformed_values() {
         Err(ConfigError::InvalidSource(_))
     ));
 }
+
+fn agent(name: &str) -> ClientIdentity {
+    ClientIdentity {
+        name: name.into(),
+        role: Role::Agent,
+        default_scope: Some("cn".into()),
+    }
+}
+
+const HASH_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const HASH_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+#[test]
+fn rename_client_moves_name_default_client_and_key_reference() {
+    let mut cfg = Config::default();
+    cfg.cli.default_client = Some("me".into());
+    cfg.add_client(human("me")).unwrap();
+    cfg.add_client(agent("bot")).unwrap();
+    cfg.keys.insert("me".into(), HASH_A.into());
+    cfg.keys.insert("bot".into(), HASH_B.into());
+
+    // default_client と [keys] を持つ human: 3 箇所すべてが新名になり、role / default_scope は不変
+    cfg.rename_client("me", " owner ").unwrap();
+    assert!(cfg.client("me").is_none());
+    let owner = cfg.client("owner").unwrap();
+    assert_eq!(owner.role, Role::Human);
+    assert_eq!(owner.default_scope.as_deref(), Some("cn"));
+    assert_eq!(cfg.cli.default_client.as_deref(), Some("owner"));
+    assert!(!cfg.keys.contains_key("me"));
+    assert_eq!(cfg.keys["owner"], HASH_A);
+    // 他クライアントの参照は動かない
+    assert_eq!(cfg.keys["bot"], HASH_B);
+    assert_eq!(cfg.clients.len(), 2);
+
+    // default_client でないクライアント: default_client はそのまま
+    cfg.rename_client("bot", "robot").unwrap();
+    assert_eq!(cfg.cli.default_client.as_deref(), Some("owner"));
+    assert_eq!(cfg.keys["robot"], HASH_B);
+    assert_eq!(cfg.keys.len(), 2);
+
+    // キー無しのクライアントは [keys] に行を作らない
+    cfg.add_client(agent("unkeyed")).unwrap();
+    cfg.rename_client("unkeyed", "renamed").unwrap();
+    assert!(!cfg.keys.contains_key("renamed"));
+    assert_eq!(cfg.keys.len(), 2);
+    cfg.validate().unwrap();
+}
+
+#[test]
+fn rename_client_rejects_blank_duplicate_and_missing_names_without_changes() {
+    let mut cfg = Config::default();
+    cfg.cli.default_client = Some("me".into());
+    cfg.add_client(human("me")).unwrap();
+    cfg.add_client(agent("bot")).unwrap();
+    cfg.keys.insert("bot".into(), HASH_B.into());
+    let before = cfg.clone();
+
+    assert!(matches!(
+        cfg.rename_client("bot", "  "),
+        Err(ConfigError::EmptyClientName)
+    ));
+    // 制御文字入りの新名は拒否する（desktop の valid_name と同じ基準。エラーに名前は含めない）
+    for bad in ["bad\nname", "bad\tname", "bad\u{7f}name", "\u{1b}[1m"] {
+        let error = cfg.rename_client("bot", bad).unwrap_err();
+        assert!(matches!(error, ConfigError::InvalidClientName), "{bad:?}");
+        assert!(!error.to_string().contains("bad"), "{bad:?}");
+    }
+    // add_client も同じ基準で拒否する
+    assert!(matches!(
+        cfg.add_client(agent("bad\nname")),
+        Err(ConfigError::InvalidClientName)
+    ));
+    assert!(matches!(
+        cfg.rename_client("bot", "me"),
+        Err(ConfigError::DuplicateClient(name)) if name == "me"
+    ));
+    // 同名（trim 後を含む）への変更も重複として拒否する
+    assert!(matches!(
+        cfg.rename_client("bot", " bot "),
+        Err(ConfigError::DuplicateClient(name)) if name == "bot"
+    ));
+    assert!(matches!(
+        cfg.rename_client("missing", "other"),
+        Err(ConfigError::UnknownClient(name)) if name == "missing"
+    ));
+    // 重複判定が不在判定より先でも、設定は一切変わらない
+    assert!(matches!(
+        cfg.rename_client("missing", "me"),
+        Err(ConfigError::DuplicateClient(_))
+    ));
+    assert_eq!(cfg, before);
+}
+
+#[test]
+fn concurrent_renames_through_update_keep_every_client_and_key() {
+    const AGENTS: usize = 8;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let mut config = Config::default();
+    config.cli.default_client = Some("me".into());
+    config.add_client(human("me")).unwrap();
+    config.keys.insert("me".into(), HASH_A.into());
+    let mut hashes = HashMap::new();
+    for index in 0..AGENTS {
+        let name = format!("agent-{index}");
+        let hash = format!("{index:0>64x}");
+        config.add_client(agent(&name)).unwrap();
+        config.keys.insert(name.clone(), hash.clone());
+        hashes.insert(name, hash);
+    }
+    config.save(&path).unwrap();
+
+    let path = Arc::new(path);
+    let barrier = Arc::new(Barrier::new(AGENTS * 2 + 1));
+    let mut handles = Vec::new();
+    for index in 0..AGENTS {
+        // 既存クライアントの改名（キー付き）
+        let (rename_path, rename_barrier) = (Arc::clone(&path), Arc::clone(&barrier));
+        handles.push(thread::spawn(move || {
+            rename_barrier.wait();
+            Config::update(&rename_path, |config| {
+                thread::sleep(Duration::from_millis(2));
+                config.rename_client(&format!("agent-{index}"), &format!("renamed-{index}"))
+            })
+        }));
+        // 同時に別クライアントの追加
+        let (add_path, add_barrier) = (Arc::clone(&path), Arc::clone(&barrier));
+        handles.push(thread::spawn(move || {
+            add_barrier.wait();
+            Config::update(&add_path, |config| {
+                config.add_client(agent(&format!("new-{index}")))
+            })
+        }));
+    }
+    // default_client を持つ human の改名も同時に行う
+    let (human_path, human_barrier) = (Arc::clone(&path), Arc::clone(&barrier));
+    handles.push(thread::spawn(move || {
+        human_barrier.wait();
+        Config::update(&human_path, |config| config.rename_client("me", "owner"))
+    }));
+    for handle in handles {
+        handle.join().unwrap().unwrap();
+    }
+
+    let loaded = Config::load(&path).unwrap();
+    assert_eq!(loaded.clients.len(), AGENTS * 2 + 1);
+    assert_eq!(loaded.cli.default_client.as_deref(), Some("owner"));
+    assert_eq!(loaded.client("owner").unwrap().role, Role::Human);
+    assert_eq!(loaded.keys["owner"], HASH_A);
+    assert_eq!(loaded.keys.len(), AGENTS + 1);
+    for index in 0..AGENTS {
+        let old = format!("agent-{index}");
+        let new = format!("renamed-{index}");
+        assert!(loaded.client(&old).is_none());
+        assert_eq!(loaded.client(&new).unwrap().role, Role::Agent);
+        assert!(!loaded.keys.contains_key(&old));
+        assert_eq!(loaded.keys[&new], hashes[&old]);
+        assert!(loaded.client(&format!("new-{index}")).is_some());
+    }
+}

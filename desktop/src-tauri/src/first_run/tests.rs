@@ -49,7 +49,7 @@ fn setup_trims_names_and_publishes_only_the_agent_hash() {
     assert_eq!(affiliations[0].name, "所属");
     let info = runtime
         .service
-        .call(&runtime.human, "get_server_info", json!({}))
+        .call(&runtime.human().unwrap(), "get_server_info", json!({}))
         .unwrap();
     assert_eq!(info["client"]["role"], "human");
     assert_eq!(info["client"]["name"], "desktop:利用者");

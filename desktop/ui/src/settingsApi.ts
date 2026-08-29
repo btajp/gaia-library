@@ -17,6 +17,11 @@ export type ClientInput = {
   defaultScope: string;
   generateKey: boolean;
 };
+export type RenamedClient = {
+  name: string;
+  key_moved: KeyStorage["location"];
+  key_error: string | null;
+};
 export type Transport = "http" | "stdio";
 export type ConnectionSnippet = {
   text: string;
@@ -40,6 +45,12 @@ export const adminClientAdd = (input: ClientInput) =>
     generateKey: input.generateKey,
   });
 export const adminClientKeygen = (name: string) => invoke<IssuedClientKey>("admin_client_keygen", { name });
+export const adminClientRename = (oldName: string, newName: string) => {
+  const name = newName.trim();
+  if (!name) return Promise.reject(new Error("新しいクライアント名を入力してください"));
+  if (name === oldName) return Promise.reject(new Error("現在と同じ名前です"));
+  return invoke<RenamedClient>("admin_client_rename", { oldName, newName: name });
+};
 export const mcpConfigSnippet = (name: string, transport: Transport) =>
   invoke<ConnectionSnippet>("mcp_config_snippet", { name, transport });
 export const cliLinkStatus = () => invoke<CliLinkStatus>("cli_link_status");

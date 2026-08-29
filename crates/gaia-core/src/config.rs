@@ -410,6 +410,12 @@ pub enum ConfigError {
     UnknownClient(String),
     #[error("client `{0}` already exists")]
     DuplicateClient(String),
+    #[error("client name must not be empty")]
+    EmptyClientName,
+    // 制御文字入りの名前は設定ファイル・通知・接続設定の表示を壊すため、書き込み系 API で拒否する
+    //（名前をそのまま echo しない）。既存設定の load は拒否しない。
+    #[error("client name must not contain control characters")]
+    InvalidClientName,
     #[error("API key hash for client `{0}` must be 64 hexadecimal characters")]
     InvalidKeyHash(String),
     #[error("clients `{first}` and `{second}` share the same API key hash")]
@@ -580,10 +586,43 @@ impl Config {
     }
 
     pub fn add_client(&mut self, client: ClientIdentity) -> Result<(), ConfigError> {
+        if client.name.chars().any(char::is_control) {
+            return Err(ConfigError::InvalidClientName);
+        }
         if self.clients.iter().any(|c| c.name == client.name) {
             return Err(ConfigError::DuplicateClient(client.name));
         }
         self.clients.push(client);
+        Ok(())
+    }
+
+    /// クライアント名を変更する。role / default_scope は変えず、`[cli].default_client` と `[keys]` の
+    /// 参照だけを新名へ付け替える（キーのハッシュは同じなので HTTP のキーは有効なまま）。
+    /// DB の履歴（proposals の proposed_by / decided_by、audit_log の actor）は書き換えない。
+    /// 呼び出しは `Config::update` の lock 内で行うこと。
+    pub fn rename_client(&mut self, old: &str, new: &str) -> Result<(), ConfigError> {
+        let new = new.trim();
+        if new.is_empty() {
+            return Err(ConfigError::EmptyClientName);
+        }
+        if new.chars().any(char::is_control) {
+            return Err(ConfigError::InvalidClientName);
+        }
+        if self.clients.iter().any(|c| c.name == new) {
+            return Err(ConfigError::DuplicateClient(new.to_owned()));
+        }
+        let client = self
+            .clients
+            .iter_mut()
+            .find(|c| c.name == old)
+            .ok_or_else(|| ConfigError::UnknownClient(old.to_owned()))?;
+        client.name = new.to_owned();
+        if self.cli.default_client.as_deref() == Some(old) {
+            self.cli.default_client = Some(new.to_owned());
+        }
+        if let Some(hash) = self.keys.remove(old) {
+            self.keys.insert(new.to_owned(), hash);
+        }
         Ok(())
     }
 

@@ -42,6 +42,8 @@ pub enum ClientCmd {
     List,
     /// API キーを（再）発行する。旧キーは即失効
     Keygen { name: String },
+    /// クライアント名を変更する（role / 既定 scope / API キーは維持。DB の履歴は書き換えない）
+    Rename { old: String, new: String },
     /// MCP クライアント設定のスニペットを出力する
     McpConfig(super::mcp_config::McpConfigArgs),
 }
@@ -133,6 +135,27 @@ pub fn client(config_path: &Path, cmd: &ClientCmd, compact: bool) -> anyhow::Res
             .map_err(config_update_error)?;
             print_issued_key(name, &key, compact);
         }
+        ClientCmd::Rename { old, new } => {
+            // 設定ファイルだけを付け替える。proposals の proposed_by / decided_by と audit_log の actor は
+            // 旧名のまま残す（履歴の保持）。
+            let renamed = Config::update(config_path, |config| {
+                config.rename_client(old, new)?;
+                Ok(new.trim().to_owned())
+            })
+            .map_err(config_update_error)?;
+            let notice = format!(
+                "stdio 接続設定には --client {renamed} が入るため、配布済みの接続設定を出し直してください。HTTP のキーは有効なままです（接続中のセッションは一度 404 になり、同じキーの initialize で新名につながります）。デスクトップでキーを保管しているクライアントは、デスクトップの「名前を変更…」で改名するか、改名後にデスクトップでキーを再発行してください"
+            );
+            if compact {
+                print_json(
+                    &json!({"client": renamed, "previous": old, "notice": notice}),
+                    true,
+                );
+            } else {
+                eprintln!("クライアント `{old}` を `{renamed}` に変更しました");
+                eprintln!("{notice}");
+            }
+        }
         ClientCmd::McpConfig(args) => super::mcp_config::print(config_path, args, compact)?,
     }
     Ok(())
@@ -156,6 +179,12 @@ fn config_update_error(error: ConfigError) -> anyhow::Error {
         }
         ConfigError::DuplicateClient(name) => {
             ToolError::conflict(format!("クライアント `{name}` は既に存在します")).into()
+        }
+        ConfigError::EmptyClientName => {
+            ToolError::invalid_params("クライアント名を空にはできません").into()
+        }
+        ConfigError::InvalidClientName => {
+            ToolError::invalid_params("クライアント名に制御文字は使えません").into()
         }
         error => error.into(),
     }

@@ -111,11 +111,92 @@ async fn initialization_is_serialized_and_publishes_runtime_after_save() {
     let config = Config::load(&dir.path().join("config.toml")).unwrap();
     assert_eq!(config.keys["claude-code"], hash_key(&response.agent_key));
     let runtime = state.runtime().unwrap();
-    assert_eq!(runtime.human.name, "desktop:user");
+    assert_eq!(runtime.human().unwrap().name, "desktop:user");
     assert!(state.server_status().await.url.is_none());
     let restored = bootstrap_at(dir.path());
     assert!(restored.initialized().unwrap());
-    assert_eq!(restored.runtime().unwrap().human, runtime.human);
+    assert_eq!(
+        restored.runtime().unwrap().human().unwrap(),
+        runtime.human().unwrap()
+    );
+}
+
+#[tokio::test]
+async fn renaming_the_desktop_human_records_later_decisions_under_the_new_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = bootstrap_at(dir.path());
+    state.initialize("scope", "user").await.unwrap();
+    let runtime = state.runtime().unwrap();
+    assert_eq!(runtime.human().unwrap().name, "desktop:user");
+    assert_eq!(
+        state.server_status().await.client.as_deref(),
+        Some("desktop:user")
+    );
+    // 改名前に agent が提案しておく
+    let proposed = runtime
+        .service
+        .call(
+            &client("claude-code", Role::Agent),
+            "propose_update",
+            json!({
+                "target_type": "person", "action": "insert", "patch": {"name": "田中 太郎"},
+                "kind": "fact", "request_id": "rename-human-0001"
+            }),
+        )
+        .unwrap();
+    let proposal_id = proposed["proposal_id"].as_i64().unwrap();
+
+    // 設定画面と同じ経路（run_settings → Config::update）で default_client の human を改名する
+    state
+        .run_settings(|runtime| {
+            Config::update(&runtime.config_path, |config| {
+                config.rename_client("desktop:user", "desktop:renamed")
+            })
+            .map_err(|e| e.to_string())
+        })
+        .await
+        .unwrap();
+
+    // 起動時の名前を保持せず、設定を読み直した新名で以降の承認を行う
+    let human = runtime.human().unwrap();
+    assert_eq!(human.name, "desktop:renamed");
+    assert_eq!(human.role, Role::Human);
+    assert_eq!(human.default_scope.as_deref(), Some("scope"));
+    assert_eq!(
+        state.server_status().await.client.as_deref(),
+        Some("desktop:renamed")
+    );
+    let approved = runtime
+        .service
+        .call(
+            &human,
+            "approve_proposal",
+            json!({"proposal_id": proposal_id}),
+        )
+        .unwrap();
+    assert_eq!(approved["status"], "approved");
+    let listed = runtime
+        .service
+        .call(&human, "list_proposals", json!({"status": "approved"}))
+        .unwrap();
+    let proposal = listed["proposals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == proposal_id)
+        .unwrap();
+    // 履歴は書き換えない: 提案者は旧名のまま、承認者は新名
+    assert_eq!(proposal["proposed_by"], "claude-code");
+    assert_eq!(proposal["decided_by"], "desktop:renamed");
+    // human を選べない設定にすると、以降の呼び出しは起動時の名前で続行せず失敗する
+    Config::update(&dir.path().join("config.toml"), |config| {
+        config.cli.default_client = None;
+        config.add_client(client("desktop:other", Role::Human))
+    })
+    .unwrap();
+    assert!(runtime.human().is_err());
+    assert!(state.server_status().await.client.is_none());
+    assert!(state.run_settings(|_| Ok(())).await.is_err());
 }
 
 #[tokio::test]
@@ -200,7 +281,7 @@ async fn missing_keys_and_bind_failure_keep_the_tool_service_available() {
     assert!(
         runtime
             .service
-            .call(&runtime.human, "get_server_info", json!({}))
+            .call(&runtime.human().unwrap(), "get_server_info", json!({}))
             .is_ok()
     );
 
@@ -397,7 +478,10 @@ async fn cancelled_setup_waiter_still_publishes_runtime_before_shutdown() {
         .unwrap()
         .unwrap();
     assert!(state.initialized().unwrap());
-    assert_eq!(state.runtime().unwrap().human.name, "desktop:user");
+    assert_eq!(
+        state.runtime().unwrap().human().unwrap().name,
+        "desktop:user"
+    );
 }
 
 #[test]

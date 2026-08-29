@@ -5,6 +5,7 @@ import { invoke } from "../../test/tauriMock";
 
 const { default: Settings } = await import("../Settings");
 const { default: ClientForm } = await import("./ClientForm");
+const { default: ClientRenameForm } = await import("./ClientRenameForm");
 const { KeyConfirmation } = await import("./ClientsSettings");
 const { IssuedClientSecret, SnippetPanel } = await import("./ClientSecrets");
 const { CliLinkControls, CliLinkFailure } = await import("./CliSettings");
@@ -31,6 +32,16 @@ describe("settings screen markup", () => {
     expect(html).not.toContain('checked=""');
     expect(html).toContain('type="submit" disabled=""');
     expect(html).toContain("空欄なら既定値を持たず");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("starts a rename with the current name and disables confirmation until it changes", () => {
+    const html = render(ClientRenameForm, { client: { name: "reader", role: "agent", default_scope: "personal", has_key: true }, busy: false, onSubmit: async () => true, cancel: () => {} });
+    expect(html).toContain('value="reader"');
+    expect(html).toContain('type="submit" disabled=""');
+    expect(html).toContain("配布済みの stdio 接続設定は変更後に出し直してください");
+    expect(html).toContain("履歴（提案者・承認者）は旧名のまま");
+    expect(html).toContain("キャンセル");
     expect(invoke).not.toHaveBeenCalled();
   });
 

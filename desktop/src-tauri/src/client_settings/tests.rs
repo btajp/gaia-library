@@ -221,6 +221,166 @@ fn newly_added_agent_returns_key_and_storage_location_without_exposing_them_in_l
     assert!(summaries.contains("\"has_key\":true"));
 }
 
+#[test]
+fn rename_moves_config_references_and_the_stored_key_to_the_new_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let mut config = config_at(&path);
+    config
+        .add_client(ClientIdentity {
+            name: "owner".into(),
+            role: Role::Human,
+            default_scope: Some("scope".into()),
+        })
+        .unwrap();
+    config.cli.default_client = Some("owner".into());
+    let (key, hash) = auth::generate_key("bot");
+    config.keys.insert("bot".into(), hash.clone());
+    config.server.port = Some(4123);
+    config.save(&path).unwrap();
+
+    let moved = Cell::new(false);
+    let renamed = rename_with(&path, "bot", " robot ", |old, new, expected| {
+        assert_eq!((old, new, expected), ("bot", "robot", hash.as_str()));
+        // 設定の保存後に呼ばれる
+        let saved = Config::load(&path).unwrap();
+        assert!(saved.client("bot").is_none());
+        assert_eq!(saved.keys["robot"], hash);
+        moved.set(true);
+        Ok(Some(MovedKey {
+            location: StoreLocation::Keychain,
+            old_removed: true,
+        }))
+    })
+    .unwrap();
+    assert!(moved.get());
+    assert_eq!(renamed.name, "robot");
+    assert!(matches!(renamed.key_moved, Some(StoreLocation::Keychain)));
+    assert!(renamed.key_error.is_none());
+
+    let saved = Config::load(&path).unwrap();
+    assert_eq!(saved.clients.len(), 2);
+    assert_eq!(saved.server.port, Some(4123));
+    assert_eq!(saved.cli.default_client.as_deref(), Some("owner"));
+    let robot = saved.client("robot").unwrap();
+    assert_eq!(robot.role, Role::Agent);
+    assert_eq!(robot.default_scope.as_deref(), Some("scope"));
+    assert_eq!(saved.keys.len(), 1);
+    // HTTP のキーは新名で有効なまま
+    assert_eq!(
+        AuthTable::from_config(&saved).verify(&key).unwrap().name,
+        "robot"
+    );
+
+    // default_client の human を改名すると default_client も追従する
+    let renamed = rename_with(&path, "owner", "me", |_, _, _| {
+        panic!("clients without a key must not touch the key store")
+    })
+    .unwrap();
+    assert_eq!(renamed.name, "me");
+    assert!(renamed.key_moved.is_none());
+    assert!(renamed.key_error.is_none());
+    let saved = Config::load(&path).unwrap();
+    assert_eq!(saved.cli.default_client.as_deref(), Some("me"));
+    assert_eq!(saved.client("me").unwrap().role, Role::Human);
+}
+
+#[test]
+fn rename_rejects_blank_duplicate_and_missing_names_without_touching_config_or_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let mut config = config_at(&path);
+    config
+        .add_client(ClientIdentity {
+            name: "other".into(),
+            role: Role::Agent,
+            default_scope: None,
+        })
+        .unwrap();
+    config
+        .keys
+        .insert("bot".into(), auth::generate_key("bot").1);
+    config.save(&path).unwrap();
+    let untouched = std::fs::read(&path).unwrap();
+    for (old, new, expected) in [
+        (
+            "bot",
+            "  ",
+            "クライアント名を入力してください。制御文字は使えません",
+        ),
+        (
+            "bot",
+            "bad\nname",
+            "クライアント名を入力してください。制御文字は使えません",
+        ),
+        ("bot", "other", "同じ名前のクライアントが既にあります"),
+        ("bot", " bot ", "同じ名前のクライアントが既にあります"),
+        ("missing", "fresh", "指定されたクライアントがありません"),
+    ] {
+        let error = rename_with(&path, old, new, |_, _, _| {
+            panic!("must validate before touching the key store")
+        })
+        .err();
+        assert_eq!(error.as_deref(), Some(expected), "{old} -> {new}");
+        assert_eq!(std::fs::read(&path).unwrap(), untouched);
+    }
+}
+
+#[test]
+fn rename_reports_a_failed_key_move_without_reverting_the_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let mut config = config_at(&path);
+    let (key, hash) = auth::generate_key("bot");
+    config.keys.insert("bot".into(), hash.clone());
+    config.save(&path).unwrap();
+
+    let renamed = rename_with(&path, "bot", "robot", |_, _, _| {
+        Err(format!("unsafe error {key}"))
+    })
+    .unwrap();
+    assert_eq!(renamed.name, "robot");
+    assert!(renamed.key_moved.is_none());
+    let warning = renamed.key_error.unwrap();
+    assert!(!warning.contains(&key));
+    assert!(!warning.contains("unsafe error"));
+    assert!(warning.contains("再発行"));
+    let saved = Config::load(&path).unwrap();
+    assert_eq!(saved.keys["robot"], hash);
+    assert!(saved.client("bot").is_none());
+
+    // 保管キーが無い（CLI で発行したなど）場合は付け替え無しで成功し、警告も出さない
+    let renamed = rename_with(&path, "robot", "bot", |_, _, _| Ok(None)).unwrap();
+    assert_eq!(renamed.name, "bot");
+    assert!(renamed.key_moved.is_none());
+    assert!(renamed.key_error.is_none());
+}
+
+#[test]
+fn rename_warns_when_the_old_stored_key_cannot_be_deleted() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let mut config = config_at(&path);
+    config
+        .keys
+        .insert("bot".into(), auth::generate_key("bot").1);
+    config.save(&path).unwrap();
+
+    // 新名への保存はできたが、旧名の項目を消せなかった: 移動は成功として返し、警告だけ出す
+    let renamed = rename_with(&path, "bot", "robot", |_, _, _| {
+        Ok(Some(MovedKey {
+            location: StoreLocation::Keychain,
+            old_removed: false,
+        }))
+    })
+    .unwrap();
+    assert_eq!(renamed.name, "robot");
+    assert!(matches!(renamed.key_moved, Some(StoreLocation::Keychain)));
+    let warning = renamed.key_error.unwrap();
+    assert!(warning.contains("削除できませんでした"));
+    assert!(warning.contains("Keychain"));
+}
+
 fn paths() -> SnippetPaths<'static> {
     SnippetPaths {
         config: Path::new("/temporary/with space/config.toml"),

@@ -32,6 +32,8 @@ gaia serve --http
 
 キーは設定の保存成功後に stdout へ一度だけ表示します。narumi では「Gaia 接続」の API キー欄に入力します。設定ファイルには SHA-256 ハッシュだけを保存するため、平文キーを失った場合は `gaia client keygen narumi` で再発行します。サーバーは認証ごとに設定を読み直すので、再起動せず旧キーが失効します。`--json` で発行すると、キーを含む JSON を stdout へ返します。これらの出力をログや公開ファイルへ保存しないでください。
 
+クライアント名の変更は `gaia client rename <旧名> <新名>` で行います。役割・既定 scope・API キー（ハッシュ）はそのまま新名へ引き継ぎ、`[cli].default_client` が旧名なら新名へ追従します。HTTP のキーは有効なままですが、stdio の接続設定には `--client <新名>` が入るため、配布済みの stdio 接続設定は出し直してください。接続中の HTTP セッションは旧名に結び付いているため改名時に一度無効になり（404 応答）、クライアントが同じキーで initialize し直すと新名で再接続します。デスクトップの Keychain / 退避ファイルに保管したキーは CLI の rename では移さず旧名のまま残るため、デスクトップでキーを保管しているクライアントはデスクトップの「名前を変更…」で改名するか、改名後にデスクトップでキーを再発行してください。DB の履歴（提案の `proposed_by` / `decided_by`、監査ログの actor）は旧名のまま残します。`--json` では `{"client": "<新名>", "previous": "<旧名>", "notice": "..."}` を stdout へ返します。
+
 設定の検証は fail-closed です。`[keys]` に 1 件でも不正なハッシュ（64 桁の hex 以外）、`[[clients]]` に無いクライアント名、別クライアントと重複するハッシュがあると設定全体の読み込みが失敗し、HTTP 認証はすべてのクライアントで拒否され、`gaia client keygen` / `gaia client add` も失敗します。復旧は設定ファイルの `[keys]` を手で編集します。不正なハッシュの行と、`[[clients]]` に無い名前の行は削除します（その名前を使い続けるなら `gaia client add <name> ...` で登録してからキーを発行します）。重複するハッシュは同じ平文キーを 2 つのクライアントで共有している状態なので、エラーに表示された両方の行を削除し、両方のクライアントで `gaia client keygen <name>` を実行して別々のキーにします。片方だけ削除すると、残した側でそのキーが引き続き有効になります。編集後は設定ファイルの権限が `0600` のままか確認してください（エディタによっては別ファイルとして保存し直し、`0644` になる場合があります）。
 
 サーバーは `127.0.0.1` のみに bind します。ポート未指定時は設定の `server.port`、それもなければ 4111〜4114 の順で使用可能なポートを探します。`--port N` で固定、`--port 0` で空きポートを選択できます。起動した URL は通常 stderr、`gaia --json serve --http --port 0` では stdout の `{"status":"listening","url":"..."}` で確認できます。
@@ -88,19 +90,42 @@ timeout_secs = 15                    # 1 参照あたりの合計（リダイレ
 max_bytes = 1048576
 max_redirects = 3
 
-[sources.narumi]                     # narumi://meeting/<meeting_id>[?version=<n>] の参照
-command = "/opt/homebrew/bin/uv"     # 絶対パス。`which uv` の結果
-args = ["--directory", "/path/to/narumi", "run", "narumi-server", "--stdio-bridge"]   # narumi.app の常駐サーバーへ接続する。/path/to/narumi は narumi のチェックアウト
+[sources.narumi]                     # narumi://meeting/<meeting_id>[?version=<n>] の参照。起動形は下記「narumi の起動形」
+command = "/Users/<me>/Library/Application Support/narumi/runtime/venv/bin/narumi-server"   # 絶対パス（narumi.app 同梱ランタイム）
+args = ["--stdio-bridge"]            # 起動済みの narumi.app（常駐サーバー）へ接続する
 timeout_secs = 30                    # initialize と get_minutes の上限。子プロセスの終了処理は別に最長 3 秒（呼び出しは timeout + 5 秒まで待つ）
 max_bytes = 1048576                  # get_minutes 応答の markdown の上限（バイト）。超過は本文を返さない
 stderr = "discard"                   # "inherit" で narumi のログを gaia の stderr に流す
-[sources.narumi.env]                 # 任意。追加・上書きするキーだけ
-NARUMI_HOME = "/Users/<me>/Library/Application Support/narumi"
+[sources.narumi.env]                 # 追加・上書きするキーだけ。narumi.app の bridge では下の 2 つが必須
+NARUMI_KEYCHAIN_HELPER = "/Applications/narumi.app/Contents/MacOS/narumi-keychain"
+NARUMI_CONTRACTS_DIR = "/Applications/narumi.app/Contents/Resources/runtime/contracts"
 ```
+
+#### narumi の起動形
+
+`narumi-server` の起動形は 2 つあり、`[sources.narumi]` にはどちらか 1 つを書く。
+
+1. narumi.app を使う場合（`--stdio-bridge`。上の例）: 先に `narumi.app` を起動しておく。bridge は常駐サーバーのトークンを Keychain から読むが、narumi.app（Developer ID 署名）が保存したトークンは別の署名のヘルパーからは読めないため、`[sources.narumi.env]` で narumi.app 同梱の `narumi-keychain` と契約ディレクトリを指定する。この env 無しでは、同梱ランタイムの `narumi-server --stdio-bridge` も narumi の README にある `uv --directory <チェックアウト> run narumi-server --stdio-bridge` も `authentication_required` で即失敗する（2026-08-29 に実機確認）。`command` は同梱ランタイム（uv とチェックアウトが不要）でも、次のようにチェックアウトの uv でもよい（env は同じ）。`NARUMI_HOME` を変更している場合は同じ値を env に加える。
+
+   ```toml
+   command = "/opt/homebrew/bin/uv"   # `which uv` の結果
+   args = ["--directory", "/path/to/narumi", "run", "narumi-server", "--stdio-bridge"]
+   ```
+
+2. チェックアウトの開発サーバーを使う場合（`--stdio`）: narumi.app を起動していない開発用途向け。独立したサーバーとしてデータルート（`NARUMI_HOME`）を直接開く（接続管理・秘密入力は不可）。narumi.app の起動中に同じデータルートを開かない。
+
+   ```toml
+   command = "/opt/homebrew/bin/uv"
+   args = ["--directory", "/path/to/narumi", "run", "narumi-server", "--stdio"]
+   [sources.narumi.env]
+   NARUMI_HOME = "/Users/<me>/Library/Application Support/narumi"
+   ```
+
+失敗時は `gaia resolve` が `resolved=false` と固定文言の `reason` を返す。`narumi command could not be started` は `command` の不在・実行不可、`narumi did not complete the MCP handshake` は起動後の失敗（narumi.app 未起動、bridge の認証失敗、契約の不一致など）で、gaia の応答には原因を含めない。切り分けは `stderr = "inherit"` にして `RUST_LOG=warn gaia resolve --ref-id <id>` を実行し、gaia の stderr に流れる narumi 側の出力（例: `{"error": {"code": "authentication_required", ...}}` は narumi.app が未起動か env の指定漏れ）を確認する。
 
 - `file`: `roots` は絶対パスのディレクトリ。symlink で外へ出る参照、ディレクトリ、バイナリ、`max_bytes` 超は読まない。設定ファイル・DB・アプリのキー退避ディレクトリは `roots` に入れても常に対象外。現行の narumi が登録する `file://` の議事録参照は、`roots` に narumi の `meetings` ディレクトリ（`NARUMI_HOME` 配下）を入れると読める。
 - `url`: 公開テキスト向け。`localhost`・プライベート・リンクローカル・メタデータ IP は DNS 解決後でも拒否し、リダイレクトも各段で検査する。`allow_hosts = ["*"]` はエージェントが任意の公開ホストへ GET できる状態（URL クエリ経由の持ち出し経路になり得る）なので、必要なホストだけを指定する。Notion / Box などはエージェント側のコネクタで開く。
-- `narumi`: `narumi-server` の起動形は 2 つある。`narumi.app` を使っている場合は `--stdio-bridge` を推奨する（起動済みの常駐サーバーへ接続する MCP クライアント用の橋渡し。narumi.app を先に起動しておく）。`--stdio` は narumi.app を起動していない開発用途向けで、独立した開発用サーバーとしてデータルートを直接開く（接続管理・秘密入力は不可）。`uv` の代わりに venv 内の `narumi-server` 実行ファイルを直接指定してもよい（孫プロセスと uv の暗黙取得を避けられる）。narumi の scope 名は gaia の所属元名（affiliation）と一致させる。narumi 参照の登録規約（`system = "narumi"`, `uri = "narumi://meeting/<meeting_id>?version=<n>"`, `snapshot` 必須）は設計書 `docs/superpowers/specs/2026-08-29-gaia-library-resolve-source-design.md` §10 を参照。
+- `narumi`: 起動形は上記「narumi の起動形」。`narumi.app` を使っている場合は `--stdio-bridge`（同梱ヘルパーの env 指定が必須）、narumi.app を起動していない開発用途は `--stdio`。同梱ランタイムの `narumi-server` を直接指定すると孫プロセスと uv の暗黙取得を避けられる。narumi の scope 名は gaia の所属元名（affiliation）と一致させる。narumi 参照の登録規約（`system = "narumi"`, `uri = "narumi://meeting/<meeting_id>?version=<n>"`, `snapshot` 必須）は設計書 `docs/superpowers/specs/2026-08-29-gaia-library-resolve-source-design.md` §10 を参照。
 - `[sources]` を書いた設定ファイルは 0.1.x では読めない。戻す場合は `[sources]` の節を削除する（既定値のままなら書き出されない）。
 
 ```sh
@@ -141,6 +166,8 @@ human `desktop:<ユーザー名>` と agent `claude-code` を作成し、agent �
 ### 設定と接続キー
 
 設定画面で所属元・クライアントを追加し、キーを発行・再発行できる。再発行後は旧キーが使えなくなるため、接続先クライアントの設定も更新する。
+クライアントカードの「名前を変更…」で名前を変更できる（CLI の `gaia client rename` と同じ）。役割・既定 scope・キーは引き継ぎ、Keychain / 退避ファイルに保管中のキーも新しい名前へ移す。stdio 接続設定には新しい名前が入るため、配布済みの stdio 接続設定は出し直す。DB の履歴（提案者・承認者）は旧名のまま残る。アプリ自身の human（`[cli].default_client`）を改名した場合も、以降の承認・却下は設定を読み直した新名で記録する。
+旧い名前の保管項目を削除できなかった場合は警告を表示する。その場合、有効なキーが旧名の Keychain 項目（サービス名 `gaia-library`）または退避ファイルに残るため、手動で確認して削除する（接続設定の表示は現在名とキーのハッシュ照合で行うため、旧名の残存キーが表示されることはない）。設定と一致しない古いキーが旧名で残る場合もあり、同様に手動で削除できる。
 クライアント管理・キー再発行は、CLI と設定画面のどちらから行っても設定ファイルの隣に作る `.lock` ファイルで直列化する。同時に実行しても、成功と返った追加や再発行は失われない。ただし、このロックを通らない直接編集（エディタで設定ファイルを書き換えるなど）は対象外で、その間に行った変更は上書きされる場合がある。
 設定ファイルが symlink の場合はリンクを残してリンク先を更新し、`.lock` と一時ファイルもリンク先の隣に作る。設定ファイル（symlink の場合はリンク先を含む）は本人だけが書けるディレクトリに置く。他のユーザーが所有する symlink は辿らずエラーで停止する。dotfiles リポジトリに置く場合は `config.toml.lock` を `.gitignore` に追加する。
 平文キーは macOS Keychain に保管し、失敗した場合はデータディレクトリの `keys/` 内の 0600 ファイルへ保存する。保存場所を画面に表示する。ファイル名はクライアント名の SHA-256、ディレクトリは 0700。

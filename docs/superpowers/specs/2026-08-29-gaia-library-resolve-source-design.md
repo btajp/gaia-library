@@ -731,6 +731,13 @@ CHANGELOG 記載案:
 - 確認した経路は `narumi-server --stdio`（narumi.app を起動せず、独立した開発用サーバーがデータルートを直接開く形。接続管理・秘密入力は不可）。`[sources.narumi]` の `command` / `args` にこの起動形を書き、gaia の narumi 解決器で次が成功した: handshake（initialize 応答の `serverInfo.name` は `narumi`）/ `get_minutes` / `not_found` / `scope_denied` / 終了処理
 - 未検証: `--stdio-bridge`（narumi.app の常駐サーバーへの橋渡し）。README の推奨設定はこちらだが、bridge 経由の handshake（`serverInfo.name` を含む）・`get_minutes`・終了処理は本記録の時点で実機確認していない。§16 の「`--stdio-bridge` が `serverInfo.name` を書き換えていないこと」は未解消のまま
 
+bridge の実機確認の記録（2026-08-29、narumi.app 起動中。読み取りのみの `initialize` を Python の subprocess から 60 秒タイムアウトで実行。常駐サーバーは止めていない）:
+
+- 0.2.1 の README 推奨形 `uv --directory <チェックアウト> run narumi-server --stdio-bridge` は env 無しでは `authentication_required`（`The authenticated local server connection could not be verified`）で即失敗する。narumi.app（Developer ID 署名）が Keychain に保存した常駐サーバーのトークンを、チェックアウト側の ad-hoc 署名 `narumi-keychain` からは読めないため
+- narumi.app 同梱ランタイム `~/Library/Application Support/narumi/runtime/venv/bin/narumi-server --stdio-bridge` と `.../venv/bin/python3 -m narumi_server.cli --stdio-bridge` も、env 無しでは同じ `authentication_required`（exit 2）で失敗する
+- `[sources.narumi.env]` に `NARUMI_KEYCHAIN_HELPER = "/Applications/narumi.app/Contents/MacOS/narumi-keychain"` と `NARUMI_CONTRACTS_DIR = "/Applications/narumi.app/Contents/Resources/runtime/contracts"` を与えると、チェックアウトの uv 経由でも同梱ランタイムの `narumi-server` 直接起動でも `initialize` が成功し、`serverInfo.name` は `narumi`（bridge は名前を書き換えない。§16 の該当項目は解消）。README の narumi.app 向け例はこの env 指定形に統一し、uv・チェックアウト不要の同梱ランタイムを第一、チェックアウトの uv を第二に示した
+- bridge 経由の `get_minutes` / `not_found` / `scope_denied` / 終了処理は本記録では未確認（`--stdio` 経路での確認結果は上記のとおり）
+
 ## 16. リスクと未検証事項
 
 - process-wrap 9.0 のプロセスグループ / kill-on-drop ラッパーの API 名は未検証（ローカル registry に無い）。実装時に `cargo fetch` して確認し、`grandchild` テストで `uv run` の孫が残らないことを観測する。残る場合は unix の `libc::killpg` を gaia-mcp に足す。README では `uv run` の代わりに venv 内の `narumi-server` 実行ファイルを直接指定する選択肢も案内する（孫プロセスと uv の暗黙ネットワーク取得を避ける）

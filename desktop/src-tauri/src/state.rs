@@ -84,7 +84,6 @@ struct HttpState {
 
 pub struct AppState {
     pub service: Arc<ToolService>,
-    pub human: ClientIdentity,
     pub config_path: PathBuf,
     pub db_path: PathBuf,
     http: Mutex<HttpState>,
@@ -93,20 +92,21 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub(crate) fn new(
-        service: Arc<ToolService>,
-        human: ClientIdentity,
-        config_path: PathBuf,
-        db_path: PathBuf,
-    ) -> Self {
+    pub(crate) fn new(service: Arc<ToolService>, config_path: PathBuf, db_path: PathBuf) -> Self {
         Self {
             service,
-            human,
             config_path,
             db_path,
             http: Mutex::default(),
             http_lifecycle: Mutex::default(),
         }
+    }
+
+    /// アプリが操作主体とする human。設定ファイルを呼び出しごとに読み直すため、設定画面や CLI で
+    /// human を改名した後の承認・却下も新名で記録される（起動時の名前を保持しない）。
+    pub fn human(&self) -> Result<ClientIdentity, String> {
+        let config = Config::load(&self.config_path).map_err(|e| e.to_string())?;
+        select_human(&config)
     }
 }
 
@@ -144,13 +144,13 @@ fn load_initialization(
             db_path,
         }));
     }
-    let human = select_human(&config)?;
+    // human を選べない設定は起動失敗にする（DB を開く前に検査する）。
+    select_human(&config)?;
     let catalog = Catalog::embedded().map_err(|e| e.to_string())?;
     let db = Db::open(&db_path).map_err(|e| e.to_string())?;
     let sources = sources_for(&config_path, &db_path);
     let app_state = AppState::new(
         Arc::new(ToolService::new(db, catalog).with_sources(sources)),
-        human,
         config_path,
         db_path,
     );
@@ -273,12 +273,12 @@ impl DesktopState {
         let guard = self.setup_lock.clone().lock_owned().await;
         self.ensure_open()?;
         let runtime = self.runtime()?;
-        if runtime.human.role != Role::Human {
-            return Err("設定操作には human クライアントが必要です".into());
-        }
         // IPC の待機が取り消されても、書込完了までは終了処理を待たせる。
         tokio::task::spawn_blocking(move || {
             let _guard = guard;
+            if runtime.human()?.role != Role::Human {
+                return Err("設定操作には human クライアントが必要です".into());
+            }
             operation(runtime)
         })
         .await
@@ -319,11 +319,13 @@ impl DesktopState {
         match self.runtime() {
             Ok(runtime) => {
                 let http = runtime.http.lock().await;
+                // 設定を読み直せない間は human を表示しない（起動時の名前を出し続けない）。
+                let human = runtime.human().ok();
                 ServerStatus {
                     url: http.server.as_ref().map(BoundServer::url),
                     error: http.error.clone(),
-                    client: Some(runtime.human.name.clone()),
-                    default_scope: runtime.human.default_scope.clone(),
+                    client: human.as_ref().map(|human| human.name.clone()),
+                    default_scope: human.and_then(|human| human.default_scope),
                 }
             }
             Err(error) => ServerStatus {

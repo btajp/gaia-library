@@ -237,6 +237,112 @@ fn failed_persistence_never_publishes_generated_keys() {
 }
 
 #[test]
+fn rename_moves_config_references_and_keeps_keys_and_history() {
+    let dir = tempfile::tempdir().unwrap();
+    init(dir.path());
+    let config_path = dir.path().join("config.toml");
+    let tester_key = text_ok(gaia(dir.path()).args(["client", "keygen", "tester"]));
+    let bot_key = text_ok(gaia(dir.path()).args([
+        "client",
+        "add",
+        "bot",
+        "--role",
+        "agent",
+        "--default-scope",
+        "primary",
+        "--generate-key",
+    ]));
+    // 改名前に agent が提案しておく（履歴の proposed_by は旧名のまま残る）
+    let proposed = json_ok(gaia(dir.path()).args([
+        "--client",
+        "bot",
+        "propose",
+        "person",
+        "insert",
+        "--patch",
+        r#"{"name": "田中 太郎"}"#,
+    ]));
+    assert_eq!(proposed["status"], "pending");
+    let proposal_id = proposed["proposal_id"].as_i64().unwrap();
+
+    // 既定 client（human）と agent を改名する
+    let renamed = json_ok(gaia(dir.path()).args(["client", "rename", "tester", " me "]));
+    assert_eq!(renamed["client"], "me");
+    assert_eq!(renamed["previous"], "tester");
+    assert!(renamed["notice"].as_str().unwrap().contains("--client me"));
+    let output = gaia(dir.path())
+        .args(["client", "rename", "bot", "robot"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty(), "rename prints nothing to stdout");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("--client robot"));
+    assert!(stderr.contains("HTTP のキーは有効なまま"));
+    // デスクトップ保管キーは CLI の rename では移らないため、案内を含める
+    assert!(stderr.contains("デスクトップ"));
+
+    let config = Config::load(&config_path).unwrap();
+    assert_eq!(config.cli.default_client.as_deref(), Some("me"));
+    assert!(config.client("tester").is_none());
+    assert!(config.client("bot").is_none());
+    assert_eq!(config.client("me").unwrap().role.to_string(), "human");
+    assert_eq!(
+        config.client("robot").unwrap().default_scope.as_deref(),
+        Some("primary")
+    );
+    assert_eq!(config.keys.len(), 2);
+    assert_eq!(config.keys["me"], hash_key(&tester_key));
+    assert_eq!(config.keys["robot"], hash_key(&bot_key));
+    let auth = AuthTable::from_config(&config);
+    assert_eq!(auth.verify(&bot_key).unwrap().name, "robot");
+    assert_eq!(auth.verify(&tester_key).unwrap().name, "me");
+
+    // 旧名は使えず、新名で再発行できる
+    let missing = json_error(gaia(dir.path()).args(["client", "keygen", "bot"]));
+    assert_eq!(missing["code"], "not_found");
+    let reissued = json_ok(gaia(dir.path()).args(["client", "keygen", "robot"]));
+    assert_eq!(reissued["client"], "robot");
+    // 旧名では識別できない（--client の解決は設定の UnknownClient をそのまま返す既存挙動）
+    let unknown = json_error(gaia(dir.path()).args(["--client", "bot", "proposals"]));
+    assert!(unknown["message"].as_str().unwrap().contains("bot"));
+
+    // 既定 client が追従し、履歴の proposed_by は旧名のまま
+    let listed = json_ok(gaia(dir.path()).args(["proposals"]));
+    let proposal = listed["proposals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == proposal_id)
+        .expect("proposal listed under the renamed default client");
+    assert_eq!(proposal["proposed_by"], "bot");
+    let approved = json_ok(gaia(dir.path()).args(["approve", &proposal_id.to_string()]));
+    assert_eq!(approved["status"], "approved");
+    let decided = json_ok(gaia(dir.path()).args(["proposals", "--status", "approved"]));
+    let decided = decided["proposals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == proposal_id)
+        .unwrap();
+    assert_eq!(decided["proposed_by"], "bot");
+    assert_eq!(decided["decided_by"], "me");
+
+    // 不在・重複・空名は拒否し、設定は変わらない
+    let before = std::fs::read(&config_path).unwrap();
+    for (args, code) in [
+        (["client", "rename", "bot", "other"], "not_found"),
+        (["client", "rename", "robot", "me"], "conflict"),
+        (["client", "rename", "robot", "  "], "invalid_params"),
+        (["client", "rename", "robot", "bad\nname"], "invalid_params"),
+    ] {
+        let error = json_error(gaia(dir.path()).args(args));
+        assert_eq!(error["code"], code, "{args:?}");
+    }
+    assert_eq!(std::fs::read(&config_path).unwrap(), before);
+}
+
+#[test]
 fn invalid_serve_flags_and_implicit_stdio_are_structured_errors() {
     let dir = tempfile::tempdir().unwrap();
     init(dir.path());
