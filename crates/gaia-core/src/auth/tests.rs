@@ -185,13 +185,13 @@ fn generated_keys_are_header_safe_for_unicode_spaces_and_control_characters() {
         assert_eq!(hash, hash_key(&plaintext));
 
         let mut config = Config::default();
-        config
-            .add_client(ClientIdentity {
-                name: name.into(),
-                role: Role::Agent,
-                default_scope: None,
-            })
-            .unwrap();
+        // add_client は制御文字入りの名前を拒否するが、手編集された設定は load を通る。
+        // その場合でも AuthTable が照合できることを確かめるため、直接 push する。
+        config.clients.push(ClientIdentity {
+            name: name.into(),
+            role: Role::Agent,
+            default_scope: None,
+        });
         config.keys.insert(name.into(), hash);
         assert_eq!(
             AuthTable::from_config(&config)

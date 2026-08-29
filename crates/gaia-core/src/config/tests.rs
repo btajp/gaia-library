@@ -890,6 +890,17 @@ fn rename_client_rejects_blank_duplicate_and_missing_names_without_changes() {
         cfg.rename_client("bot", "  "),
         Err(ConfigError::EmptyClientName)
     ));
+    // 制御文字入りの新名は拒否する（desktop の valid_name と同じ基準。エラーに名前は含めない）
+    for bad in ["bad\nname", "bad\tname", "bad\u{7f}name", "\u{1b}[1m"] {
+        let error = cfg.rename_client("bot", bad).unwrap_err();
+        assert!(matches!(error, ConfigError::InvalidClientName), "{bad:?}");
+        assert!(!error.to_string().contains("bad"), "{bad:?}");
+    }
+    // add_client も同じ基準で拒否する
+    assert!(matches!(
+        cfg.add_client(agent("bad\nname")),
+        Err(ConfigError::InvalidClientName)
+    ));
     assert!(matches!(
         cfg.rename_client("bot", "me"),
         Err(ConfigError::DuplicateClient(name)) if name == "me"

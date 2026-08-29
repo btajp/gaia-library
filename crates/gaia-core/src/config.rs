@@ -412,6 +412,10 @@ pub enum ConfigError {
     DuplicateClient(String),
     #[error("client name must not be empty")]
     EmptyClientName,
+    // 制御文字入りの名前は設定ファイル・通知・接続設定の表示を壊すため、書き込み系 API で拒否する
+    //（名前をそのまま echo しない）。既存設定の load は拒否しない。
+    #[error("client name must not contain control characters")]
+    InvalidClientName,
     #[error("API key hash for client `{0}` must be 64 hexadecimal characters")]
     InvalidKeyHash(String),
     #[error("clients `{first}` and `{second}` share the same API key hash")]
@@ -582,6 +586,9 @@ impl Config {
     }
 
     pub fn add_client(&mut self, client: ClientIdentity) -> Result<(), ConfigError> {
+        if client.name.chars().any(char::is_control) {
+            return Err(ConfigError::InvalidClientName);
+        }
         if self.clients.iter().any(|c| c.name == client.name) {
             return Err(ConfigError::DuplicateClient(client.name));
         }
@@ -597,6 +604,9 @@ impl Config {
         let new = new.trim();
         if new.is_empty() {
             return Err(ConfigError::EmptyClientName);
+        }
+        if new.chars().any(char::is_control) {
+            return Err(ConfigError::InvalidClientName);
         }
         if self.clients.iter().any(|c| c.name == new) {
             return Err(ConfigError::DuplicateClient(new.to_owned()));
